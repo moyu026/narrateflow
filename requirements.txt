@@ -1,0 +1,12 @@
+qwen-tts==0.1.1
+transformers
+accelerate
+torch
+torchaudio
+torchvision
+soundfile
+librosa
+requests
+opencv-python
+numpy
+gradio

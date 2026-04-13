@@ -15,6 +15,21 @@ It extracts narration text, generates paragraph-level voice audio, aligns audio 
 | VL backend | Qwen2.5-VL-72B via MAAS API | Used in `timeline_align` |
 | API key | `MAAS_API_KEY` | Required for timeline alignment |
 
+## Installation
+
+Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Notes:
+
+- `requirements.txt` covers the Python package dependencies used by the current pipeline.
+- For GPU acceleration, make sure your `torch` / `torchaudio` / `torchvision` installation matches your CUDA environment.
+- `ffmpeg` / `ffprobe` must be installed separately and available in `PATH`.
+- `sox` is optional but recommended. If unavailable, speed adjustment falls back to `librosa`.
+
 ## Recommended Usage
 
 The recommended way to run NarrateFlow is through the interactive pipeline entrypoint:
