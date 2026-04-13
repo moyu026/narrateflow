@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+venv313/
+venv_gemma/
+venv_minicpm/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test / cache / logs
+.pytest_cache/
+.mypy_cache/
+.cache/
+.ruff_cache/
+*.log
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local scripts and temp files
+tmp/
+debug/
+
+# Generated outputs
+outputs/
+
+# Input assets
+inputs/
+
+# Media
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# Model / profile artifacts
+*.pt
+*.ckpt
+*.safetensors
+
+# Generated debug timeline files
+*.debug.json
+
+# Notebook
+.ipynb_checkpoints/
