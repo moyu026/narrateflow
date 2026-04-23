@@ -228,7 +228,24 @@ def split_spoken_paragraph(text: str, max_chars: int) -> list[str]:
     return segments
 
 
-def extract_slide_paragraphs(ppt_path: Path, page: int) -> list[dict[str, Any]]:
+def is_banner_header_text(text: str) -> bool:
+    text = str(text).strip()
+    if not text:
+        return False
+    sentence_like = bool(re.search(r"[。！？!?；;]$", text))
+    if sentence_like:
+        return False
+    date_prefixed = bool(re.search(r"^\d{6,8}[-_ ].+", text))
+    version_like = bool(
+        re.search(r"(\bv?\d+(?:\.\d+){1,3}\b|版本|ver(?:sion)?\b)", text, re.I)
+    )
+    title_like = bool(re.search(r"(宣传|介绍|实践|演示|教程|视频|方案|说明)", text))
+    return len(text) <= 120 and ((date_prefixed and version_like) or (date_prefixed and title_like))
+
+
+def extract_slide_paragraphs(
+    ppt_path: Path, page: int, return_debug: bool = False
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     wait_for_file_stable(ppt_path)
     slide_name = f"ppt/slides/slide{page}.xml"
     with zipfile.ZipFile(ppt_path) as archive:
@@ -259,12 +276,18 @@ def extract_slide_paragraphs(ppt_path: Path, page: int) -> list[dict[str, Any]]:
     ns = {**PPT_NS, "p": P_NS}
 
     for shape in root.findall(".//p:sp", ns):
+        off_x = None
         off_y = None
+        ext_cx = None
         ext_cy = None
         off = shape.find("p:spPr/a:xfrm/a:off", ns)
         ext = shape.find("p:spPr/a:xfrm/a:ext", ns)
+        if off is not None and off.get("x"):
+            off_x = int(off.get("x"))
         if off is not None and off.get("y"):
             off_y = int(off.get("y"))
+        if ext is not None and ext.get("cx"):
+            ext_cx = int(ext.get("cx"))
         if ext is not None and ext.get("cy"):
             ext_cy = int(ext.get("cy"))
         tx_body = shape.find(
@@ -280,14 +303,25 @@ def extract_slide_paragraphs(ppt_path: Path, page: int) -> list[dict[str, Any]]:
                     {
                         "index": para_index,
                         "text": text,
+                        "x": off_x,
                         "y": off_y,
+                        "w": ext_cx,
                         "h": ext_cy,
                     }
                 )
                 para_index += 1
 
     positioned = [item for item in shape_records if item["y"] is not None]
+    filtered_debug: list[dict[str, Any]] = []
     if positioned:
+        shape_records = sorted(
+            shape_records,
+            key=lambda item: (
+                int(item["y"]) if item.get("y") is not None else 10**12,
+                int(item.get("x") or 0),
+                int(item["index"]),
+            ),
+        )
         top_y = min(int(item["y"]) for item in positioned)
         bottom_y = max(int(item["y"]) + int(item.get("h") or 0) for item in positioned)
         span = max(1, bottom_y - top_y)
@@ -295,26 +329,98 @@ def extract_slide_paragraphs(ppt_path: Path, page: int) -> list[dict[str, Any]]:
         new_index = 1
         for item in shape_records:
             y = item.get("y")
+            x = item.get("x")
+            w = item.get("w")
             h = int(item.get("h") or 0)
             text = str(item["text"])
-            is_header_footer = False
-            if y is not None:
+            is_header_footer = is_banner_header_text(text)
+            filter_reason = "banner_header_text" if is_header_footer else None
+            if y is not None and not is_header_footer:
                 top_ratio = (int(y) - top_y) / span
                 bottom_ratio = (bottom_y - (int(y) + h)) / span
-                short_text = len(text) <= 28
-                is_header_footer = short_text and (
-                    top_ratio <= 0.08 or bottom_ratio <= 0.08
-                )
+                short_text = len(text) <= 20
+                sentence_like = bool(re.search(r"[。！？!?；;]$", text))
+                edge_like = top_ratio <= 0.05 or bottom_ratio <= 0.05
+                is_header_footer = short_text and edge_like and not sentence_like
+                if is_header_footer:
+                    filter_reason = "short_edge_label"
+                if not is_header_footer and short_text:
+                    path_like = bool(
+                        re.search(r"([A-Za-z]:\\|/|^page\s*\d+|第\s*\d+\s*页|^\d+$)", text, re.I)
+                    )
+                    is_header_footer = path_like and (
+                        top_ratio <= 0.08 or bottom_ratio <= 0.08
+                    )
+                    if is_header_footer:
+                        filter_reason = "path_or_page_footer"
+                if not is_header_footer and not sentence_like:
+                    date_prefixed_header = bool(
+                        re.search(r"^\d{6,8}[-_ ].+", text)
+                    )
+                    date_or_version_like = bool(
+                        re.search(
+                            r"(^\d{6,8}[-_ ]|\bv?\d+(?:\.\d+){1,3}\b|版本|ver(?:sion)?\b)",
+                            text,
+                            re.I,
+                        )
+                    )
+                    title_like = bool(
+                        re.search(r"(宣传|介绍|实践|演示|教程|视频|方案|说明)", text)
+                    )
+                    version_like = bool(
+                        re.search(r"(\bv?\d+(?:\.\d+){1,3}\b|版本|ver(?:sion)?\b)", text, re.I)
+                    )
+                    top_banner_like = (
+                        top_ratio <= 0.25
+                        and len(text) <= 80
+                        and not sentence_like
+                        and (
+                            (date_prefixed_header and title_like)
+                            or (date_prefixed_header and version_like)
+                            or (title_like and version_like)
+                        )
+                    )
+                    compact_header_like = len(text) <= 40 and date_or_version_like
+                    is_header_footer = compact_header_like and (
+                        top_ratio <= 0.08 or bottom_ratio <= 0.05
+                    )
+                    if is_header_footer:
+                        filter_reason = "compact_date_or_version_header"
+                    if not is_header_footer:
+                        is_header_footer = date_prefixed_header and (
+                            top_ratio <= 0.18 or title_like
+                        )
+                        if is_header_footer:
+                            filter_reason = "date_prefixed_header"
+                    if not is_header_footer:
+                        is_header_footer = top_banner_like
+                        if is_header_footer:
+                            filter_reason = "top_banner_header"
             if is_header_footer:
+                filtered_debug.append(
+                    {
+                        "text": text,
+                        "x": x,
+                        "y": y,
+                        "w": w,
+                        "h": h,
+                        "reason": filter_reason,
+                    }
+                )
                 continue
             filtered.append({"index": new_index, "text": text})
             new_index += 1
+        if return_debug:
+            return filtered, filtered_debug
         return filtered
 
-    return [
+    paragraphs = [
         {"index": idx + 1, "text": item["text"]}
         for idx, item in enumerate(shape_records)
     ]
+    if return_debug:
+        return paragraphs, filtered_debug
+    return paragraphs
 
 
 def prepare_ppt_page(
@@ -325,7 +431,9 @@ def prepare_ppt_page(
     title_indices: set[int] | None = None,
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    paragraphs = extract_slide_paragraphs(ppt_path, page)
+    paragraphs, filtered_debug = extract_slide_paragraphs(
+        ppt_path, page, return_debug=True
+    )
     rules = load_pronunciation_rules(rules_path)
     extracted_path, spoken_path = create_script_paths(
         ppt_path, page, output_dir=output_dir
@@ -344,6 +452,9 @@ def prepare_ppt_page(
         "paragraph_count": len(paragraphs),
         "paragraphs": paragraphs,
         "combined_text": "\n".join(item["text"] for item in paragraphs),
+        "debug": {
+            "filtered_paragraphs": filtered_debug,
+        },
     }
 
     spoken_paragraphs: list[dict[str, Any]] = []
