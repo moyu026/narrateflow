@@ -330,13 +330,205 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     return config
 
 
+def summarize_initial_inputs(
+    config: dict[str, Any], run_mode: str, target_stage: str | None
+) -> list[str]:
+    lines = [f"run_mode: {run_mode}"]
+    if target_stage is not None:
+        lines.append(f"target_stage: {target_stage}")
+
+    if needs_text_inputs(run_mode, target_stage):
+        lines.append(f"ppt: {config.get('ppt')}")
+        lines.append(f"page: {config.get('page')}")
+        lines.append(f"title_mode: {config.get('title_mode')}")
+        if config.get("title_mode") == "manual":
+            lines.append(
+                "title_indices: "
+                + ",".join(str(item) for item in sorted(config.get("title_indices", [])))
+            )
+
+    if config.get("spoken_json"):
+        lines.append(f"spoken_json: {config.get('spoken_json')}")
+    if config.get("timeline"):
+        lines.append(f"timeline: {config.get('timeline')}")
+    if config.get("segments_manifest"):
+        lines.append(f"segments_manifest: {config.get('segments_manifest')}")
+    if config.get("video"):
+        lines.append(f"video: {config.get('video')}")
+
+    if config.get("profile"):
+        lines.append(f"profile: {config.get('profile')}")
+    elif config.get("voice_name") or config.get("ref_audio") or config.get("ref_text"):
+        lines.append(f"voice_name: {config.get('voice_name')}")
+        lines.append(f"ref_audio: {config.get('ref_audio')}")
+        lines.append(f"ref_text: {config.get('ref_text')}")
+
+    if config.get("cover_image"):
+        lines.append(f"cover_image: {config.get('cover_image')}")
+        lines.append(
+            f"cover_paragraph_index: {config.get('cover_paragraph_index') or 2}"
+        )
+        lines.append(
+            "cover_duration_sec: "
+            + (
+                str(config.get("cover_duration_sec"))
+                if config.get("cover_duration_sec") is not None
+                else "auto"
+            )
+        )
+
+    if config.get("paragraphs"):
+        lines.append(f"paragraphs: {config.get('paragraphs')}")
+    if config.get("volume_gain") is not None:
+        lines.append(f"volume_gain: {config.get('volume_gain')}")
+
+    if config.get("probe_times"):
+        lines.append(f"probe_times: {config.get('probe_times')}")
+    lines.append(
+        "api_key: "
+        + ("set" if config.get("api_key") else "not set")
+    )
+    return lines
+
+
+def confirm_initial_inputs(
+    config: dict[str, Any], run_mode: str, target_stage: str | None
+) -> str:
+    print()
+    print("Collected inputs:")
+    for line in summarize_initial_inputs(config, run_mode, target_stage):
+        print(f"- {line}")
+    return prompt_choice(
+        "Input action\n- c: continue\n- e: edit inputs for this run\n- s: stop here\nChoice",
+        ["c", "e", "s"],
+        default="c",
+    )
+
+
+def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    args.ppt = config.get("ppt")
+    args.page = config.get("page")
+    args.video = config.get("video")
+    args.title_mode = config.get("title_mode")
+    title_indices = sorted(config.get("title_indices", []))
+    args.title_indices = ",".join(str(item) for item in title_indices) if title_indices else None
+    args.spoken_json = config.get("spoken_json")
+    args.timeline = config.get("timeline")
+    args.segments_manifest = config.get("segments_manifest")
+    args.profile = config.get("profile")
+    args.voice_name = config.get("voice_name")
+    args.ref_audio = config.get("ref_audio")
+    args.ref_text = config.get("ref_text")
+    args.cover_image = config.get("cover_image")
+    args.cover_duration_sec = config.get("cover_duration_sec")
+    args.cover_paragraph_index = config.get("cover_paragraph_index")
+    args.paragraphs = config.get("paragraphs")
+    args.volume_gain = config.get("volume_gain")
+    args.probe_mode = config.get("probe_mode")
+    args.probe_times = config.get("probe_times")
+    args.api_key = config.get("api_key")
+
+
+def available_edit_sections(
+    config: dict[str, Any], run_mode: str, target_stage: str | None
+) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    if needs_text_inputs(run_mode, target_stage):
+        sections.append(("text", "text inputs"))
+    if config.get("spoken_json") or config.get("timeline") or config.get("segments_manifest"):
+        sections.append(("paths", "stage paths"))
+    if config.get("video"):
+        sections.append(("video", "video path"))
+    if (
+        config.get("profile")
+        or config.get("voice_name")
+        or config.get("ref_audio")
+        or config.get("ref_text")
+        or target_stage in {"profile", "voice"}
+        or run_mode == "full"
+    ):
+        sections.append(("profile", "voice/profile inputs"))
+    if needs_cover_options(run_mode, target_stage):
+        sections.append(("cover", "cover intro"))
+    if config.get("probe_times") or run_mode == "full" or target_stage in {"timeline"}:
+        sections.append(("probe", "timeline probe"))
+    seen: set[str] = set()
+    unique_sections: list[tuple[str, str]] = []
+    for key, label in sections:
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_sections.append((key, label))
+    return unique_sections
+
+
+def ask_edit_section(
+    config: dict[str, Any], run_mode: str, target_stage: str | None
+) -> str:
+    sections = available_edit_sections(config, run_mode, target_stage)
+    if len(sections) == 1:
+        return sections[0][0]
+    print()
+    print("Edit which section:")
+    for key, label in sections:
+        print(f"- {key}: {label}")
+    return prompt_choice(
+        "Section",
+        [key for key, _ in sections],
+        default=sections[0][0],
+    )
+
+
+def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
+    if section == "text":
+        args.ppt = None
+        args.page = None
+        args.title_mode = None
+        args.title_indices = None
+        return
+    if section == "paths":
+        args.spoken_json = None
+        args.timeline = None
+        args.segments_manifest = None
+        return
+    if section == "video":
+        args.video = None
+        return
+    if section == "profile":
+        args.profile = None
+        args.voice_name = None
+        args.ref_audio = None
+        args.ref_text = None
+        return
+    if section == "cover":
+        args.cover_image = None
+        args.cover_duration_sec = None
+        args.cover_paragraph_index = 2
+        return
+    if section == "probe":
+        args.probe_times = None
+        args.api_key = None
+        return
+
+
 def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
+    if args.only_stage and args.from_stage:
+        raise ValueError("Use either --only-stage or --from-stage, not both.")
+
     if args.only_stage:
         target_stage = STAGE_ALIASES.get(args.only_stage, args.only_stage)
         if target_stage in {"text", "profile", "voice", "timeline", "compose"}:
             return "only", target_stage
         raise ValueError(
             "Unsupported --only-stage value. Use one of: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose"
+        )
+
+    if args.from_stage:
+        target_stage = STAGE_ALIASES.get(args.from_stage, args.from_stage)
+        if target_stage in {"text", "profile", "voice", "timeline", "compose"}:
+            return "from", target_stage
+        raise ValueError(
+            "Unsupported --from-stage value. Use one of: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose"
         )
 
     run_mode = prompt_choice(
@@ -722,6 +914,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--only-stage",
         help="Run only one stage. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
     )
+    parser.add_argument(
+        "--from-stage",
+        help="Start from one stage and continue. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
+    )
     return parser
 
 
@@ -730,7 +926,16 @@ def main() -> None:
     run_mode, target_stage = resolve_run_plan(args)
     args.run_mode = run_mode
     args.target_stage = target_stage
-    config = resolve_initial_args(args)
+    while True:
+        config = resolve_initial_args(args)
+        sync_config_to_args(args, config)
+        input_action = confirm_initial_inputs(config, run_mode, target_stage)
+        if input_action == "c":
+            break
+        if input_action == "s":
+            return
+        section = ask_edit_section(config, run_mode, target_stage)
+        clear_args_for_section(args, section)
 
     total = 5
 
