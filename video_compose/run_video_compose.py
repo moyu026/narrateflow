@@ -5,6 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import librosa
 import numpy as np
 import soundfile as sf
 
@@ -405,6 +406,68 @@ def build_cover_audio_prefix(
     return prefix, placement
 
 
+def get_audio_duration(audio_path: Path) -> float:
+    info = sf.info(audio_path)
+    return float(info.frames / info.samplerate)
+
+
+def append_outro_to_video(
+    video_path: Path,
+    outro_image: Path,
+    outro_duration_sec: float,
+    output_video: Path,
+    work_dir: Path,
+    width: int,
+    height: int,
+) -> Path:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    outro_video = work_dir / "outro.mp4"
+    concat_list = work_dir / "outro_concat.txt"
+    build_cover_video(outro_image, outro_duration_sec, outro_video, width, height)
+    concat_list.write_text(
+        f"file '{video_path.resolve().as_posix()}'\nfile '{outro_video.resolve().as_posix()}'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-c",
+            "copy",
+            str(output_video),
+        ],
+        check=True,
+    )
+    return output_video
+
+
+def build_outro_audio_suffix(
+    outro_audio: Path,
+    sample_rate: int,
+    placed_start: float,
+) -> tuple[np.ndarray, dict]:
+    wav, sr = sf.read(outro_audio, dtype="float32")
+    wav = np.asarray(wav, dtype=np.float32)
+    if int(sr) != sample_rate:
+        wav = librosa.resample(wav, orig_sr=int(sr), target_sr=sample_rate)
+        wav = np.asarray(wav, dtype=np.float32)
+    duration = float(len(wav) / sample_rate)
+    placement = {
+        "placed_start": round(placed_start, 3),
+        "placed_end": round(placed_start + duration, 3),
+        "audio_duration": round(duration, 3),
+        "segment_wav": str(outro_audio),
+        "is_outro": True,
+    }
+    return wav, placement
+
+
 def run_video_compose(
     video: Path,
     timeline: Path,
@@ -416,6 +479,8 @@ def run_video_compose(
     cover_image: Path | None = None,
     cover_duration_sec: float | None = None,
     cover_paragraph_index: int = 2,
+    outro_image: Path | None = None,
+    outro_audio: Path | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     video_duration = get_video_duration(video)
@@ -469,6 +534,26 @@ def run_video_compose(
             )
             shifted_placements.append(shifted)
         placements = [cover_placement] + shifted_placements
+    applied_outro_duration = None
+    if outro_image is not None and outro_audio is not None:
+        applied_outro_duration = get_audio_duration(outro_audio)
+        final_video_input = append_outro_to_video(
+            video_path=final_video_input,
+            outro_image=outro_image,
+            outro_duration_sec=applied_outro_duration,
+            output_video=output_dir / "page_retimed_video_with_outro.mp4",
+            work_dir=output_dir / "outro_tmp",
+            width=video_width,
+            height=video_height,
+        )
+        outro_start = float(len(audio_track) / sample_rate)
+        outro_suffix, outro_placement = build_outro_audio_suffix(
+            outro_audio=outro_audio,
+            sample_rate=sample_rate,
+            placed_start=outro_start,
+        )
+        audio_track = np.concatenate([audio_track, outro_suffix]).astype(np.float32)
+        placements = placements + [outro_placement]
     sf.write(output_dir / "page_audio.wav", audio_track, sample_rate)
     mux_video(
         final_video_input,
@@ -486,6 +571,9 @@ def run_video_compose(
         "cover_image": str(cover_image) if cover_image else None,
         "cover_duration_sec": applied_cover_duration,
         "cover_paragraph_index": cover_paragraph_index if cover_image else None,
+        "outro_image": str(outro_image) if outro_image else None,
+        "outro_audio": str(outro_audio) if outro_audio else None,
+        "outro_duration_sec": applied_outro_duration,
         "segments": segments,
         "placements": placements,
     }
@@ -508,6 +596,8 @@ def main() -> None:
     parser.add_argument("--cover-image", default=None)
     parser.add_argument("--cover-duration-sec", type=float, default=None)
     parser.add_argument("--cover-paragraph-index", type=int, default=2)
+    parser.add_argument("--outro-image", default=None)
+    parser.add_argument("--outro-audio", default=None)
     args = parser.parse_args()
 
     output = run_video_compose(
@@ -521,6 +611,8 @@ def main() -> None:
         cover_image=Path(args.cover_image) if args.cover_image else None,
         cover_duration_sec=args.cover_duration_sec,
         cover_paragraph_index=args.cover_paragraph_index,
+        outro_image=Path(args.outro_image) if args.outro_image else None,
+        outro_audio=Path(args.outro_audio) if args.outro_audio else None,
     )
     print(output)
 

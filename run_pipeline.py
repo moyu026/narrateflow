@@ -6,7 +6,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+import soundfile as sf
+
 from text_process.run_text_process import prepare_ppt_page, slugify
+from voice_process.common import load_model, load_prompt_file, synthesize_segment_wavs, write_json
 from voice_process.run_voice_profile import run_voice_profile
 from voice_process.run_voice_generate import run_voice_generate
 from timeline_align.run_timeline_align import run_timeline_align
@@ -143,6 +146,14 @@ def needs_cover_options(run_mode: str, target_stage: str | None) -> bool:
     return run_mode == "from" and target_stage in {"profile", "voice"}
 
 
+def needs_outro_options(run_mode: str, target_stage: str | None) -> bool:
+    if run_mode == "full":
+        return True
+    if target_stage == "compose":
+        return True
+    return run_mode == "from" and target_stage in {"profile", "voice", "timeline"}
+
+
 def needs_profile_creation_inputs(
     run_mode: str, config: dict[str, Any], target_stage: str | None
 ) -> bool:
@@ -166,6 +177,7 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["spoken_json"] = None
     config["timeline"] = None
     config["segments_manifest"] = None
+    config["outro_profile"] = None
 
     if needs_text_inputs(run_mode, target_stage):
         config["ppt"] = (
@@ -309,6 +321,63 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["cover_image"] = cover_image
     config["cover_duration_sec"] = cover_duration_sec
     config["cover_paragraph_index"] = cover_paragraph_index
+    outro_image = (
+        validate_existing_file(args.outro_image, "outro image") if args.outro_image else None
+    )
+    outro_audio = (
+        validate_existing_file(args.outro_audio, "outro audio") if args.outro_audio else None
+    )
+    outro_text = args.outro_text
+    outro_profile = (
+        validate_existing_path(args.outro_profile, "outro profile", kinds=("file", "dir"))
+        if args.outro_profile
+        else None
+    )
+    if outro_image is not None and outro_audio is None and not outro_text:
+        has_fixed_outro_audio = prompt_choice(
+            "Do you already have a fixed outro slogan audio",
+            ["y", "n"],
+            default="y",
+        )
+        if has_fixed_outro_audio == "y":
+            outro_audio = prompt_existing_path("Outro audio path")
+        else:
+            outro_text = prompt_text("Outro slogan text")
+            if run_mode in {"only", "from"} and target_stage in {"compose", "timeline"} and not config.get("profile"):
+                outro_profile = prompt_existing_path(
+                    "Voice profile path for outro generation (.pt file or profile directory)",
+                    kinds=("file", "dir"),
+                )
+    if outro_image is None and needs_outro_options(run_mode, target_stage):
+        use_outro = prompt_choice(
+            "Do you want to append an outro page after the main video",
+            ["y", "n"],
+            default="n",
+        )
+        if use_outro == "y":
+            outro_image = prompt_existing_path("Outro image path")
+            has_fixed_outro_audio = prompt_choice(
+                "Do you already have a fixed outro slogan audio",
+                ["y", "n"],
+                default="y",
+            )
+            if has_fixed_outro_audio == "y":
+                outro_audio = prompt_existing_path("Outro audio path")
+            else:
+                outro_text = outro_text or prompt_text("Outro slogan text")
+                if run_mode in {"only", "from"} and target_stage in {"compose", "timeline"} and not config.get("profile"):
+                    outro_profile = prompt_existing_path(
+                        "Voice profile path for outro generation (.pt file or profile directory)",
+                        kinds=("file", "dir"),
+                    )
+        else:
+            outro_audio = None
+            outro_text = None
+            outro_profile = None
+    config["outro_image"] = outro_image
+    config["outro_audio"] = outro_audio
+    config["outro_text"] = outro_text
+    config["outro_profile"] = outro_profile
     config["paragraphs"] = args.paragraphs
     config["volume_gain"] = args.volume_gain
     config["probe_mode"] = args.probe_mode
@@ -377,6 +446,16 @@ def summarize_initial_inputs(
             )
         )
 
+    if config.get("outro_image"):
+        lines.append(f"outro_image: {config.get('outro_image')}")
+        lines.append(
+            "outro_audio: " + (config.get("outro_audio") or "generate from profile")
+        )
+        if config.get("outro_text"):
+            lines.append(f"outro_text: {config.get('outro_text')}")
+        if config.get("outro_profile"):
+            lines.append(f"outro_profile: {config.get('outro_profile')}")
+
     if config.get("paragraphs"):
         lines.append(f"paragraphs: {config.get('paragraphs')}")
     if config.get("volume_gain") is not None:
@@ -422,6 +501,10 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.cover_image = config.get("cover_image")
     args.cover_duration_sec = config.get("cover_duration_sec")
     args.cover_paragraph_index = config.get("cover_paragraph_index")
+    args.outro_image = config.get("outro_image")
+    args.outro_audio = config.get("outro_audio")
+    args.outro_text = config.get("outro_text")
+    args.outro_profile = config.get("outro_profile")
     args.paragraphs = config.get("paragraphs")
     args.volume_gain = config.get("volume_gain")
     args.probe_mode = config.get("probe_mode")
@@ -450,6 +533,8 @@ def available_edit_sections(
         sections.append(("profile", "voice/profile inputs"))
     if needs_cover_options(run_mode, target_stage):
         sections.append(("cover", "cover intro"))
+    if needs_outro_options(run_mode, target_stage):
+        sections.append(("outro", "outro page"))
     if config.get("probe_times") or run_mode == "full" or target_stage in {"timeline"}:
         sections.append(("probe", "timeline probe"))
     seen: set[str] = set()
@@ -504,6 +589,12 @@ def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
         args.cover_image = None
         args.cover_duration_sec = None
         args.cover_paragraph_index = 2
+        return
+    if section == "outro":
+        args.outro_image = None
+        args.outro_audio = None
+        args.outro_text = None
+        args.outro_profile = None
         return
     if section == "probe":
         args.probe_times = None
@@ -866,17 +957,74 @@ def run_stage3(config: dict[str, Any], spoken_json: Path) -> Path:
     return output
 
 
+def resolve_outro_profile_path(config: dict[str, Any]) -> Path:
+    if config.get("outro_profile"):
+        return resolve_profile_path(config["outro_profile"])
+    if config.get("profile"):
+        return Path(config["profile"])
+    raise ValueError("Voice profile is required to generate outro slogan audio.")
+
+
+def generate_outro_audio(config: dict[str, Any], output_dir: Path) -> Path | None:
+    if not config.get("outro_image"):
+        return None
+    if config.get("outro_audio"):
+        return Path(config["outro_audio"])
+    if not config.get("outro_text"):
+        return None
+
+    profile_path = resolve_outro_profile_path(config)
+    prompt_items = load_prompt_file(profile_path)
+    tts = load_model()
+    segments = [
+        {
+            "segment_id": "outro_slogan",
+            "paragraph_index": 9999,
+            "spoken_text": config["outro_text"],
+        }
+    ]
+    wavs, sample_rate = synthesize_segment_wavs(
+        tts=tts,
+        prompt_items=prompt_items,
+        segments=segments,
+        language="Chinese",
+        speed=1.0,
+        max_new_tokens=1024,
+        batch_size=1,
+    )
+    outro_dir = output_dir / "outro"
+    outro_dir.mkdir(parents=True, exist_ok=True)
+    outro_audio_path = outro_dir / "outro_slogan.wav"
+    outro_meta_path = outro_dir / "outro_slogan.json"
+    sf.write(outro_audio_path, wavs[0], sample_rate)
+    write_json(
+        outro_meta_path,
+        {
+            "profile_path": str(profile_path),
+            "text": config["outro_text"],
+            "wav_path": str(outro_audio_path),
+            "sample_rate": sample_rate,
+            "duration": round(float(len(wavs[0]) / sample_rate), 3),
+        },
+    )
+    return outro_audio_path
+
+
 def run_stage4(
     config: dict[str, Any], timeline_path: Path, manifest_path: Path
 ) -> Path:
+    output_dir = default_compose_output_dir(timeline_path, config)
+    outro_audio = generate_outro_audio(config, output_dir)
     return run_video_compose(
         video=Path(config["video"]),
         timeline=timeline_path,
         segments_manifest=manifest_path,
-        output_dir=default_compose_output_dir(timeline_path, config),
+        output_dir=output_dir,
         cover_image=Path(config["cover_image"]) if config.get("cover_image") else None,
         cover_duration_sec=config.get("cover_duration_sec"),
         cover_paragraph_index=int(config.get("cover_paragraph_index") or 2),
+        outro_image=Path(config["outro_image"]) if config.get("outro_image") else None,
+        outro_audio=outro_audio,
     )
 
 
@@ -903,6 +1051,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cover-image")
     parser.add_argument("--cover-duration-sec", type=float)
     parser.add_argument("--cover-paragraph-index", type=int, default=2)
+    parser.add_argument("--outro-image")
+    parser.add_argument("--outro-audio")
+    parser.add_argument("--outro-text")
+    parser.add_argument("--outro-profile")
     parser.add_argument("--paragraphs")
     parser.add_argument("--volume-gain", type=float)
     parser.add_argument(

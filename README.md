@@ -53,6 +53,13 @@ If a cover image should be shown before the main video starts, the interactive r
 - `cover paragraph index`
 - optional cover duration override
 
+The interactive runner can also ask for an outro page:
+
+- whether to enable an outro page
+- `outro image path`
+- whether a fixed slogan audio already exists
+- otherwise, a fixed slogan text that can be synthesized with the current voice profile
+
 ## Example Interactive Flow
 
 Below is a simplified example of what an interactive run looks like.
@@ -85,6 +92,11 @@ Do you want to prepend a cover image before the main video (y/n) [n]: y
 Cover image path: <path/to/cover.png>
 Cover paragraph index [2]: 2
 Optional cover duration in seconds (empty means use cover paragraph audio duration):
+
+Do you want to append an outro page after the main video (y/n) [n]: y
+Outro image path: <path/to/outro.png>
+Do you already have a fixed outro slogan audio (y/n) [y]: n
+Outro slogan text: <your fixed slogan text>
 ```
 
 ### Stage 1. Text Processing
@@ -209,6 +221,11 @@ If a cover intro is enabled, Stage 5 will:
 - use the selected cover paragraph audio at the beginning
 - shift the main video body after the intro duration
 
+If an outro page is enabled, Stage 5 will:
+- append a static outro page after the main video
+- use a fixed slogan audio if provided
+- otherwise generate the slogan audio from the current voice profile and append it at the end
+
 If something is wrong:
 - go back to Stage 3 for audio issues
 - go back to Stage 4 for timing issues
@@ -228,6 +245,7 @@ output_dir:   outputs/composed/<page_name>
 - text extraction filters some short header/footer-like slide text blocks based on layout position
 - optional cover intro support with `cover_image` and `cover_paragraph_index`
 - when a cover intro is enabled, the cover paragraph is excluded from body timeline alignment and the body starts from the next paragraph
+- optional outro page support with either fixed slogan audio or generated slogan audio
 - start-driven timeline semantics
 - local video retiming instead of truncating audio
 - current composition defaults:
