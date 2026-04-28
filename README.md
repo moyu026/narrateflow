@@ -46,6 +46,13 @@ The pipeline now supports three execution modes:
 
 The CLI asks only for the inputs needed by the selected mode and stage.
 
+Stage 1 now supports both `.pptx` and `.txt` inputs. For plain text input:
+
+- use a `.txt` file as the document source
+- the pipeline treats it as a single-page script source
+- if the file contains blank lines, blank lines are used as paragraph boundaries
+- otherwise, each non-empty line is treated as one paragraph
+
 If a cover image should be shown before the main video starts, the interactive runner can now ask for:
 
 - whether to enable a cover intro
@@ -97,6 +104,12 @@ Do you want to append an outro page after the main video (y/n) [n]: y
 Outro image path: <path/to/outro.png>
 Do you already have a fixed outro slogan audio (y/n) [y]: n
 Outro slogan text: <your fixed slogan text>
+```
+
+For a plain text script, you can also start directly with:
+
+```bash
+python run_pipeline.py --only-stage text --input "<path/to/script.txt>"
 ```
 
 ### Stage 1. Text Processing

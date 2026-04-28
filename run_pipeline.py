@@ -164,6 +164,10 @@ def needs_profile_creation_inputs(
     return False
 
 
+def is_text_file_input(path_text: str | None) -> bool:
+    return bool(path_text) and Path(str(path_text)).suffix.lower() == ".txt"
+
+
 def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config: dict[str, Any] = {}
     run_mode = args.run_mode
@@ -181,11 +185,14 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
 
     if needs_text_inputs(run_mode, target_stage):
         config["ppt"] = (
-            validate_existing_file(args.ppt, "PPT path")
+            validate_existing_file(args.ppt, "document path")
             if args.ppt
-            else prompt_existing_path("PPT path")
+            else prompt_existing_path("Document path (.pptx or .txt)")
         )
-        config["page"] = args.page or int(prompt_text("Page number"))
+        if is_text_file_input(config["ppt"]):
+            config["page"] = args.page or 1
+        else:
+            config["page"] = args.page or int(prompt_text("Page number"))
         title_mode = args.title_mode or prompt_choice(
             "Title mode\n- first: treat the first paragraph as title\n- none: treat all paragraphs as narration\n- manual: choose title paragraph indices manually\nChoice",
             ["first", "none", "manual"],
@@ -407,7 +414,7 @@ def summarize_initial_inputs(
         lines.append(f"target_stage: {target_stage}")
 
     if needs_text_inputs(run_mode, target_stage):
-        lines.append(f"ppt: {config.get('ppt')}")
+        lines.append(f"document: {config.get('ppt')}")
         lines.append(f"page: {config.get('page')}")
         lines.append(f"title_mode: {config.get('title_mode')}")
         if config.get("title_mode") == "manual":
@@ -1031,6 +1038,7 @@ def run_stage4(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactive NarrateFlow pipeline")
     parser.add_argument("--ppt")
+    parser.add_argument("--input", dest="ppt")
     parser.add_argument("--page", type=int)
     parser.add_argument("--video")
     parser.add_argument("--profile")

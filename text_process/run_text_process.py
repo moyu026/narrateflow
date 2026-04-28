@@ -51,10 +51,22 @@ def wait_for_file_stable(
         time.sleep(interval_sec)
 
 
+def read_text_source(path: Path) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    raise UnicodeDecodeError("text", b"", 0, 1, f"unable to decode text file: {path}")
+
+
 def create_script_paths(
-    ppt_path: Path, page: int, output_dir: Path | None = None
+    ppt_path: Path,
+    page: int,
+    output_dir: Path | None = None,
+    title_indices: set[int] | None = None,
 ) -> tuple[Path, Path]:
-    title_dir = get_ppt_output_dir_name(ppt_path, page)
+    title_dir = get_ppt_output_dir_name(ppt_path, page, title_indices=title_indices)
     out_dir = output_dir if output_dir is not None else (SCRIPTS_DIR / title_dir)
     return (
         out_dir / f"page_{page:02d}.extracted.json",
@@ -62,12 +74,23 @@ def create_script_paths(
     )
 
 
-def get_ppt_output_dir_name(ppt_path: Path, page: int) -> str:
+def get_ppt_output_dir_name(
+    ppt_path: Path, page: int, title_indices: set[int] | None = None
+) -> str:
+    if title_indices is not None and len(title_indices) == 0:
+        return slugify(ppt_path.stem, max_len=60)
     try:
-        paragraphs = extract_slide_paragraphs(ppt_path, page)
+        paragraphs = extract_source_paragraphs(ppt_path, page)
     except Exception:
         paragraphs = []
-    title = paragraphs[0]["text"] if paragraphs else ppt_path.stem
+    if title_indices:
+        title_paragraph = next(
+            (p for p in paragraphs if int(p["index"]) in title_indices),
+            None,
+        )
+        title = title_paragraph["text"] if title_paragraph else ppt_path.stem
+    else:
+        title = paragraphs[0]["text"] if paragraphs else ppt_path.stem
     return slugify(title, max_len=60)
 
 
@@ -241,6 +264,35 @@ def is_banner_header_text(text: str) -> bool:
     )
     title_like = bool(re.search(r"(宣传|介绍|实践|演示|教程|视频|方案|说明)", text))
     return len(text) <= 120 and ((date_prefixed and version_like) or (date_prefixed and title_like))
+
+
+def extract_txt_paragraphs(text_path: Path) -> list[dict[str, Any]]:
+    wait_for_file_stable(text_path)
+    raw = read_text_source(text_path).replace("\r\n", "\n").replace("\r", "\n")
+    blocks = [block.strip() for block in re.split(r"\n\s*\n+", raw) if block.strip()]
+    if len(blocks) <= 1:
+        paragraphs = [line.strip() for line in raw.splitlines() if line.strip()]
+    else:
+        paragraphs = [
+            " ".join(line.strip() for line in block.splitlines() if line.strip())
+            for block in blocks
+        ]
+    return [
+        {"index": idx + 1, "text": paragraph}
+        for idx, paragraph in enumerate(paragraphs)
+        if paragraph
+    ]
+
+
+def extract_source_paragraphs(
+    source_path: Path, page: int, return_debug: bool = False
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if source_path.suffix.lower() == ".txt":
+        paragraphs = extract_txt_paragraphs(source_path)
+        if return_debug:
+            return paragraphs, []
+        return paragraphs
+    return extract_slide_paragraphs(source_path, page, return_debug=return_debug)
 
 
 def extract_slide_paragraphs(
@@ -431,22 +483,26 @@ def prepare_ppt_page(
     title_indices: set[int] | None = None,
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    paragraphs, filtered_debug = extract_slide_paragraphs(
+    paragraphs, filtered_debug = extract_source_paragraphs(
         ppt_path, page, return_debug=True
     )
+    source_type = "text" if ppt_path.suffix.lower() == ".txt" else "ppt"
     rules = load_pronunciation_rules(rules_path)
+    if title_indices is None:
+        title_indices = {1}
     extracted_path, spoken_path = create_script_paths(
-        ppt_path, page, output_dir=output_dir
+        ppt_path, page, output_dir=output_dir, title_indices=title_indices
     )
-    title_indices = title_indices or {1}
     title_paragraph = next((p for p in paragraphs if p["index"] in title_indices), None)
     title_text = (
         title_paragraph["text"]
         if title_paragraph
-        else (paragraphs[0]["text"] if paragraphs else "")
+        else (ppt_path.stem if len(title_indices) == 0 else (paragraphs[0]["text"] if paragraphs else ""))
     )
 
     extracted_payload = {
+        "source_path": str(ppt_path.resolve()),
+        "source_type": source_type,
         "ppt_path": str(ppt_path.resolve()),
         "page": page,
         "paragraph_count": len(paragraphs),
@@ -501,6 +557,8 @@ def prepare_ppt_page(
             segment_index += 1
 
     spoken_payload = {
+        "source_path": str(ppt_path.resolve()),
+        "source_type": source_type,
         "ppt_path": str(ppt_path.resolve()),
         "page": page,
         "title_text": title_text,
@@ -530,8 +588,10 @@ def prepare_ppt_page(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 1 text processing")
-    parser.add_argument("--ppt", required=True)
-    parser.add_argument("--page", type=int, required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--ppt")
+    group.add_argument("--input", dest="ppt")
+    parser.add_argument("--page", type=int, required=False, default=1)
     parser.add_argument("--rules", default=None)
     parser.add_argument("--max-chars", type=int, default=72)
     parser.add_argument(
