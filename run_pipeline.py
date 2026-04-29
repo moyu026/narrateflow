@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -90,22 +89,6 @@ def validate_existing_file(raw: str, label: str) -> str:
     if not path.is_file():
         raise FileNotFoundError(f"Invalid {label}: {path}")
     return str(path)
-
-
-def read_env_key(name: str) -> str | None:
-    if os.environ.get(name):
-        return os.environ[name]
-    env_path = ROOT / ".env"
-    if not env_path.exists():
-        return None
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key.strip() == name:
-            return value.strip()
-    return None
 
 
 def normalize_config_value(value: Any) -> Any:
@@ -340,9 +323,6 @@ def resolve_initial_args(
     config["outro_profile"] = outro_profile
     config["paragraphs"] = raw_config.get("paragraphs")
     config["volume_gain"] = raw_config.get("volume_gain")
-    config["probe_mode"] = raw_config.get("probe_mode") or "keyframes"
-    config["probe_times"] = raw_config.get("probe_times")
-    config["api_key"] = raw_config.get("api_key") or read_env_key("MAAS_API_KEY")
     return config
 
 
@@ -409,12 +389,6 @@ def summarize_initial_inputs(
     if config.get("volume_gain") is not None:
         lines.append(f"volume_gain: {config.get('volume_gain')}")
 
-    if config.get("probe_times"):
-        lines.append(f"probe_times: {config.get('probe_times')}")
-    lines.append(
-        "api_key: "
-        + ("set" if config.get("api_key") else "not set")
-    )
     return lines
 
 
@@ -730,9 +704,6 @@ def run_stage3(config: dict[str, Any], spoken_json: Path) -> Path:
         spoken_json=spoken_json,
         output=output,
         debug_dir=default_timeline_debug_dir(config, spoken_json),
-        api_key=config["api_key"],
-        probe_mode=config["probe_mode"],
-        probe_times=config["probe_times"],
         cover_paragraph_index=(
             int(config.get("cover_paragraph_index") or 2)
             if config.get("cover_image")

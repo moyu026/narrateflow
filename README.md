@@ -2,18 +2,16 @@
 
 NarrateFlow is a human-in-the-loop pipeline for turning PPTs or documents into dubbed videos.
 
-It extracts narration text, generates paragraph-level voice audio, aligns audio to a target video timeline with a vision-language model, and renders the final dubbed video.
+It extracts narration text, generates paragraph-level voice audio, builds the video timeline from script timestamps, and renders the final dubbed video.
 
 ## Environment
 
 | Component | Requirement | Notes |
 |---|---|---|
 | Python | 3.13 | Recommended runtime |
-| FFmpeg / FFprobe | Required | Used for frame extraction and video composition |
+| FFmpeg / FFprobe | Required | Used for video composition and duration probing |
 | CUDA | Recommended | Speeds up local TTS inference |
 | Local TTS backend | Qwen-TTS | Used in `voice_process` |
-| VL backend | Qwen2.5-VL-72B via MAAS API | Used in `timeline_align` |
-| API key | `MAAS_API_KEY` | Required for timeline alignment |
 
 ## Installation
 
@@ -58,6 +56,8 @@ Stage 1 now supports both `.pptx` and `.txt` inputs. For plain text input:
 - the pipeline treats it as a single-page script source
 - if the file contains blank lines, blank lines are used as paragraph boundaries
 - otherwise, each non-empty line is treated as one paragraph
+- each narration paragraph must start with a timestamp such as `0.0s,正文` or `1.5s，正文`
+- timestamp prefixes are removed before TTS and saved as `timeline_start_sec`
 
 If a cover image should be shown before the main video starts, set these fields:
 
@@ -85,11 +85,17 @@ video = "path/to/example.mp4"
 title_mode = "first"
 title_indices = "1"
 profile = "outputs/voice_profiles/reference_voice"
-probe_mode = "keyframes"
-probe_times = "0,10,20,30"
 ```
 
 For a plain text script, set `ppt` to the `.txt` path and leave `page = 1`.
+
+Example timestamped text:
+
+```text
+0.0s,这是第一段内容
+
+1.5s,这是第二段内容
+```
 
 To run only Stage 1, comment out `[all]`, uncomment `[only]`, and set `stage = "text"`.
 
@@ -145,9 +151,9 @@ Examples:
 - `3`: generate paragraph 3 only
 - `3,5,7`: generate selected paragraphs
 
-Equivalent CLI options:
-- `--paragraphs 3,5,7`
-- `--volume-gain 1.1`
+Equivalent config fields:
+- `paragraphs = "3,5,7"`
+- `volume_gain = 1.1`
 
 Edit or regenerate if needed:
 - edit `page_XX.spoken.json -> paragraphs[].spoken_text` if wording is wrong
@@ -178,7 +184,6 @@ Enter paragraph indices to regenerate (comma separated or 'all'): 4,7
 
 Check:
 - paragraph starts
-- missing paragraphs
 - ordering issues
 
 If a cover intro is enabled, the cover paragraph does not need a body timeline start.
@@ -186,7 +191,8 @@ For example, when `cover_paragraph_index=2`, paragraph 2 is treated as the intro
 
 Edit if needed:
 - `page_XX.timeline.final.json -> segments[].start`
-- for missing paragraphs, set `matched=true` and provide `start`
+
+The timeline stage now reads script timestamps directly. If a non-cover narration paragraph is missing a timestamp, Stage 4 fails and tells you which paragraph needs a `0.0s,`-style prefix.
 
 ```text
 [4/5] Timeline Alignment
@@ -241,6 +247,7 @@ output_dir:   outputs/composed/<page_name>
 - when a cover intro is enabled, the cover paragraph is excluded from body timeline alignment and the body starts from the next paragraph
 - optional outro page support with either fixed slogan audio or generated slogan audio
 - start-driven timeline semantics
+- no API-key dependency for timeline generation
 - local video retiming instead of truncating audio
 - current composition defaults:
   - `buffer_sec = 1.2`
@@ -250,7 +257,7 @@ output_dir:   outputs/composed/<page_name>
 ## Limitations
 
 - some source PPT files may contain malformed text encoding
-- timeline alignment quality depends on UI visibility, subtitle availability, and visual distinction between adjacent segments
+- every non-cover narration paragraph must provide a timestamp prefix before timeline generation
 - human review is still recommended for production-quality output
 - some sentence endings may require spoken-text rewriting for better TTS delivery
 - the current workflow is page-oriented rather than a full-deck production pipeline
@@ -265,7 +272,6 @@ output_dir:   outputs/composed/<page_name>
 
 ## Roadmap
 
-- continue refining timeline alignment quality and probe strategy
 - keep simplifying `run_pipeline.py` interaction without making the workflow more rigid
 - improve README examples with more realistic sample commands and outputs
 - add better review and recovery tools for paragraph-level regeneration and timeline fixing

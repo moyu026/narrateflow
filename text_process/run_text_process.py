@@ -18,6 +18,7 @@ DEFAULT_RULES_PATH = (
 )
 PPT_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+TIMESTAMP_PREFIX_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[s秒][,，]\s*(.*)$")
 
 
 def slugify(text: str, max_len: int = 60) -> str:
@@ -266,6 +267,16 @@ def is_banner_header_text(text: str) -> bool:
     return len(text) <= 120 and ((date_prefixed and version_like) or (date_prefixed and title_like))
 
 
+def parse_timestamp_prefix(text: str) -> tuple[float | None, str]:
+    match = TIMESTAMP_PREFIX_RE.match(text)
+    if not match:
+        return None, text
+    clean_text = match.group(2).strip()
+    if not clean_text:
+        raise ValueError(f"时间戳后缺少正文内容: {text!r}")
+    return float(match.group(1)), clean_text
+
+
 def extract_txt_paragraphs(text_path: Path) -> list[dict[str, Any]]:
     wait_for_file_stable(text_path)
     raw = read_text_source(text_path).replace("\r\n", "\n").replace("\r", "\n")
@@ -277,11 +288,16 @@ def extract_txt_paragraphs(text_path: Path) -> list[dict[str, Any]]:
             " ".join(line.strip() for line in block.splitlines() if line.strip())
             for block in blocks
         ]
-    return [
-        {"index": idx + 1, "text": paragraph}
-        for idx, paragraph in enumerate(paragraphs)
-        if paragraph
-    ]
+    extracted: list[dict[str, Any]] = []
+    for idx, paragraph in enumerate(paragraphs):
+        if not paragraph:
+            continue
+        timeline_start_sec, clean_text = parse_timestamp_prefix(paragraph)
+        item: dict[str, Any] = {"index": idx + 1, "text": clean_text}
+        if timeline_start_sec is not None:
+            item["timeline_start_sec"] = timeline_start_sec
+        extracted.append(item)
+    return extracted
 
 
 def extract_source_paragraphs(
@@ -490,6 +506,12 @@ def prepare_ppt_page(
     rules = load_pronunciation_rules(rules_path)
     if title_indices is None:
         title_indices = {1}
+    if (
+        source_type == "text"
+        and title_indices == {1}
+        and any(item.get("timeline_start_sec") is not None for item in paragraphs)
+    ):
+        title_indices = set()
     extracted_path, spoken_path = create_script_paths(
         ppt_path, page, output_dir=output_dir, title_indices=title_indices
     )
@@ -535,6 +557,11 @@ def prepare_ppt_page(
                 "spoken_text": spoken_text,
                 "segment_count": len(segments),
                 "applied_rules": paragraph_rules,
+                **(
+                    {"timeline_start_sec": float(paragraph["timeline_start_sec"])}
+                    if paragraph.get("timeline_start_sec") is not None
+                    else {}
+                ),
             }
         )
         if paragraph_rules:
@@ -552,6 +579,11 @@ def prepare_ppt_page(
                     "paragraph_index": paragraph["index"],
                     "source_text": paragraph["text"],
                     "spoken_text": segment_text,
+                    **(
+                        {"timeline_start_sec": float(paragraph["timeline_start_sec"])}
+                        if paragraph.get("timeline_start_sec") is not None
+                        else {}
+                    ),
                 }
             )
             segment_index += 1

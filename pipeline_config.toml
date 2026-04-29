@@ -61,14 +61,6 @@ outro_audio = ""
 outro_text = ""
 outro_profile = ""
 
-# Timeline probe settings. These are kept for the current VLM timeline flow.
-# probe_mode options: "keyframes", "times".
-probe_mode = "keyframes"
-probe_times = "0,10,20,30"
-
-# Optional MAAS API key. Leave empty to read MAAS_API_KEY from environment or .env.
-api_key = ""
-
 # [only]
 # Run only one stage.
 # stage options: "text", "profile", "voice", "timeline", "compose".
@@ -100,9 +92,6 @@ api_key = ""
 # outro_audio = ""
 # outro_text = ""
 # outro_profile = ""
-# probe_mode = "keyframes"
-# probe_times = "0,10,20,30"
-# api_key = ""
 
 # [from]
 # Start from one stage and continue forward.
@@ -135,6 +124,3 @@ api_key = ""
 # outro_audio = ""
 # outro_text = ""
 # outro_profile = ""
-# probe_mode = "keyframes"
-# probe_times = "0,10,20,30"
-# api_key = ""

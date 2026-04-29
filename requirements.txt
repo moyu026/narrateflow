@@ -6,7 +6,5 @@ torchaudio
 torchvision
 soundfile
 librosa
-requests
-opencv-python
 numpy
 gradio
