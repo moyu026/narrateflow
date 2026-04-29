@@ -32,19 +32,25 @@ Notes:
 
 ## Recommended Usage
 
-The recommended way to run NarrateFlow is through the interactive pipeline entrypoint:
+The recommended way to run NarrateFlow is through the config-driven pipeline entrypoint:
 
 ```bash
 python run_pipeline.py
 ```
 
-The pipeline now supports three execution modes:
+By default, `run_pipeline.py` reads `pipeline_config.toml`. You can use a different file with:
 
-1. `full`: run the complete pipeline from Stage 1 to Stage 5
+```bash
+python run_pipeline.py --config path/to/pipeline_config.toml
+```
+
+The config supports three execution modes:
+
+1. `all`: run the complete pipeline from Stage 1 to Stage 5
 2. `only`: run only one stage
 3. `from`: start from a stage and continue forward
 
-The CLI asks only for the inputs needed by the selected mode and stage.
+Keep exactly one mode section active in `pipeline_config.toml`. The default template leaves `[all]` active and comments out `[only]` and `[from]`. Edit the active section values before running.
 
 Stage 1 now supports both `.pptx` and `.txt` inputs. For plain text input:
 
@@ -53,64 +59,39 @@ Stage 1 now supports both `.pptx` and `.txt` inputs. For plain text input:
 - if the file contains blank lines, blank lines are used as paragraph boundaries
 - otherwise, each non-empty line is treated as one paragraph
 
-If a cover image should be shown before the main video starts, the interactive runner can now ask for:
+If a cover image should be shown before the main video starts, set these fields:
 
-- whether to enable a cover intro
 - `cover image path`
 - `cover paragraph index`
 - optional cover duration override
 
-The interactive runner can also ask for an outro page:
+The config can also enable an outro page:
 
-- whether to enable an outro page
 - `outro image path`
-- whether a fixed slogan audio already exists
-- otherwise, a fixed slogan text that can be synthesized with the current voice profile
+- either a fixed slogan audio path
+- or fixed slogan text that can be synthesized with the current voice profile
 
-## Example Interactive Flow
+## Example Config Flow
 
-Below is a simplified example of what an interactive run looks like.
+Below is a simplified `[all]` config example.
 
 ### Input Collection
 
-```text
-Run mode
-- full: run the full pipeline
-- only: run only one stage
-- from: start from one stage and continue
-Choice (full/only/from) [full]: full
-
-PPT path: <path/to/example.pptx>
-Page number: 5
-Target video path: <path/to/example.mp4>
-
-Title mode
-- first: treat the first paragraph as title
-- none: treat all paragraphs as narration
-- manual: choose title paragraph indices manually
-Choice (first/none/manual) [first]: first
-
-Do you already have a voice profile file (y/n) [y]: y
-Voice profile path (.pt file or profile directory): outputs/voice_profiles/reference_voice
-
-Initial probe times (comma separated, keyframe times) [0,10,20,30]: 0,10,20,30
-
-Do you want to prepend a cover image before the main video (y/n) [n]: y
-Cover image path: <path/to/cover.png>
-Cover paragraph index [2]: 2
-Optional cover duration in seconds (empty means use cover paragraph audio duration):
-
-Do you want to append an outro page after the main video (y/n) [n]: y
-Outro image path: <path/to/outro.png>
-Do you already have a fixed outro slogan audio (y/n) [y]: n
-Outro slogan text: <your fixed slogan text>
+```toml
+[all]
+ppt = "path/to/example.pptx"
+page = 5
+video = "path/to/example.mp4"
+title_mode = "first"
+title_indices = "1"
+profile = "outputs/voice_profiles/reference_voice"
+probe_mode = "keyframes"
+probe_times = "0,10,20,30"
 ```
 
-For a plain text script, you can also start directly with:
+For a plain text script, set `ppt` to the `.txt` path and leave `page = 1`.
 
-```bash
-python run_pipeline.py --only-stage text --input "<path/to/script.txt>"
-```
+To run only Stage 1, comment out `[all]`, uncomment `[only]`, and set `stage = "text"`.
 
 ### Stage 1. Text Processing
 

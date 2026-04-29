@@ -1,0 +1,140 @@
+# NarrateFlow pipeline config.
+# Keep exactly one active section: [all], [only], or [from].
+# Comment out the other two sections before running.
+
+[all]
+# Run the full pipeline: text -> profile/voice -> timeline -> compose.
+
+# Document source. Supported: .pptx or .txt.
+ppt = ""
+
+# PPT page number. For .txt input this can stay 1.
+page = 1
+
+# Target source video path. Supported: any ffmpeg-readable video file.
+video = ""
+
+# Title handling. Options: "first", "none", "manual".
+title_mode = "first"
+
+# Used only when title_mode = "manual". Example: "1" or "1,2".
+title_indices = "1"
+
+# Existing voice profile path. Supported: .pt file or profile directory.
+# Leave empty to create a profile from voice_name/ref_audio/ref_text.
+profile = ""
+
+# Used when profile is empty.
+voice_name = ""
+
+# Used when profile is empty. Recommended reference audio length: 10-20 seconds.
+ref_audio = ""
+
+# Used when profile is empty. Text spoken in ref_audio.
+ref_text = ""
+
+# Optional output overrides. Leave empty to use defaults under outputs/.
+stage1_output_dir = ""
+profile_output_dir = ""
+voice_output_dir = ""
+timeline_output = ""
+timeline_debug_dir = ""
+compose_output_dir = ""
+
+# Optional voice generation subset. Empty means generate all paragraphs.
+# Examples: "", "3", "3,5,7".
+paragraphs = ""
+
+# Optional volume multiplier for generated paragraphs. Examples: 0.9, 1.1.
+# Set to 1.0 for no gain change.
+volume_gain = 1.0
+
+# Optional cover intro. Leave cover_image empty to disable.
+cover_image = ""
+cover_duration_sec = 0.0
+cover_paragraph_index = 2
+
+# Optional outro page. Leave outro_image empty to disable.
+# If outro_image is set, provide either outro_audio or outro_text.
+outro_image = ""
+outro_audio = ""
+outro_text = ""
+outro_profile = ""
+
+# Timeline probe settings. These are kept for the current VLM timeline flow.
+# probe_mode options: "keyframes", "times".
+probe_mode = "keyframes"
+probe_times = "0,10,20,30"
+
+# Optional MAAS API key. Leave empty to read MAAS_API_KEY from environment or .env.
+api_key = ""
+
+# [only]
+# Run only one stage.
+# stage options: "text", "profile", "voice", "timeline", "compose".
+# stage = "text"
+# ppt = ""
+# page = 1
+# video = ""
+# title_mode = "first"
+# title_indices = "1"
+# spoken_json = ""
+# timeline = ""
+# segments_manifest = ""
+# profile = ""
+# voice_name = ""
+# ref_audio = ""
+# ref_text = ""
+# stage1_output_dir = ""
+# profile_output_dir = ""
+# voice_output_dir = ""
+# timeline_output = ""
+# timeline_debug_dir = ""
+# compose_output_dir = ""
+# paragraphs = ""
+# volume_gain = 1.0
+# cover_image = ""
+# cover_duration_sec = 0.0
+# cover_paragraph_index = 2
+# outro_image = ""
+# outro_audio = ""
+# outro_text = ""
+# outro_profile = ""
+# probe_mode = "keyframes"
+# probe_times = "0,10,20,30"
+# api_key = ""
+
+# [from]
+# Start from one stage and continue forward.
+# stage options: "profile", "voice", "timeline", "compose".
+# stage = "voice"
+# ppt = ""
+# page = 1
+# video = ""
+# title_mode = "first"
+# title_indices = "1"
+# spoken_json = ""
+# timeline = ""
+# segments_manifest = ""
+# profile = ""
+# voice_name = ""
+# ref_audio = ""
+# ref_text = ""
+# stage1_output_dir = ""
+# profile_output_dir = ""
+# voice_output_dir = ""
+# timeline_output = ""
+# timeline_debug_dir = ""
+# compose_output_dir = ""
+# paragraphs = ""
+# volume_gain = 1.0
+# cover_image = ""
+# cover_duration_sec = 0.0
+# cover_paragraph_index = 2
+# outro_image = ""
+# outro_audio = ""
+# outro_text = ""
+# outro_profile = ""
+# probe_mode = "keyframes"
+# probe_times = "0,10,20,30"
+# api_key = ""

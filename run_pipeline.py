@@ -3,15 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tomllib
 from pathlib import Path
 from typing import Any
 
-import soundfile as sf
-
 from text_process.run_text_process import prepare_ppt_page, slugify
-from voice_process.common import load_model, load_prompt_file, synthesize_segment_wavs, write_json
-from voice_process.run_voice_profile import run_voice_profile
-from voice_process.run_voice_generate import run_voice_generate
 from timeline_align.run_timeline_align import run_timeline_align
 from video_compose.run_video_compose import run_video_compose
 
@@ -32,7 +28,9 @@ STAGE_ALIASES = {
 }
 
 STAGE_SELECTION_CHOICES = ["text", "profile", "voice", "timeline", "compose"]
-RUN_MODE_CHOICES = ["full", "only", "from"]
+CONFIG_RUN_MODE_MAP = {"all": "full", "full": "full", "only": "only", "from": "from"}
+CONFIG_SECTIONS = {"all", "full", "only", "from"}
+DEFAULT_CONFIG_PATH = ROOT / "pipeline_config.toml"
 
 
 def prompt_text(label: str, default: str | None = None, required: bool = True) -> str:
@@ -46,22 +44,6 @@ def prompt_text(label: str, default: str | None = None, required: bool = True) -
             return default
         if not required:
             return ""
-
-
-def prompt_existing_path(
-    label: str,
-    default: str | None = None,
-    kinds: tuple[str, ...] = ("file",),
-) -> str:
-    while True:
-        value = prompt_text(label, default=default, required=True)
-        path = Path(value)
-        if "file" in kinds and path.is_file():
-            return str(path)
-        if "dir" in kinds and path.is_dir():
-            return str(path)
-        expected = " or ".join(kinds)
-        print(f"Path does not exist or is not a valid {expected}: {path}")
 
 
 def prompt_choice(label: str, choices: list[str], default: str | None = None) -> str:
@@ -126,6 +108,60 @@ def read_env_key(name: str) -> str | None:
     return None
 
 
+def normalize_config_value(value: Any) -> Any:
+    if isinstance(value, str):
+        value = value.strip()
+        return value if value else None
+    return value
+
+
+def load_pipeline_config(path: Path) -> tuple[str, str | None, dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Pipeline config not found: {path}. Copy or edit pipeline_config.toml first."
+        )
+    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    active_sections = [name for name in CONFIG_SECTIONS if name in payload]
+    if len(active_sections) != 1:
+        raise ValueError(
+            "pipeline_config.toml must contain exactly one active run section: "
+            "[all], [only], or [from]. Comment out the other two sections."
+        )
+
+    section_name = active_sections[0]
+    section = payload.get(section_name)
+    if not isinstance(section, dict):
+        raise ValueError(f"Invalid [{section_name}] section in {path}.")
+
+    run_mode = CONFIG_RUN_MODE_MAP[section_name]
+    target_stage = normalize_config_value(section.get("stage"))
+    if run_mode == "full":
+        target_stage = None
+    else:
+        if not target_stage:
+            raise ValueError(f"[{section_name}] requires stage.")
+        target_stage = STAGE_ALIASES.get(str(target_stage), str(target_stage))
+        if target_stage not in STAGE_SELECTION_CHOICES:
+            raise ValueError(
+                f"Unsupported stage for [{section_name}]: {target_stage}. "
+                f"Use one of: {', '.join(STAGE_SELECTION_CHOICES)}"
+            )
+
+    config = {
+        key: normalize_config_value(value)
+        for key, value in section.items()
+        if key != "stage"
+    }
+    return run_mode, target_stage, config
+
+
+def require_config_value(config: dict[str, Any], key: str, label: str | None = None) -> Any:
+    value = config.get(key)
+    if value is None:
+        raise ValueError(f"Missing required config value: {label or key}")
+    return value
+
+
 def needs_text_inputs(run_mode: str, target_stage: str | None) -> bool:
     return run_mode == "full" or (run_mode == "only" and target_stage == "text")
 
@@ -136,22 +172,6 @@ def needs_video_input(run_mode: str, target_stage: str | None) -> bool:
     return target_stage in {"timeline", "compose"} or (
         run_mode == "from" and target_stage in {"profile", "voice"}
     )
-
-
-def needs_cover_options(run_mode: str, target_stage: str | None) -> bool:
-    if run_mode == "full":
-        return True
-    if target_stage in {"timeline", "compose"}:
-        return True
-    return run_mode == "from" and target_stage in {"profile", "voice"}
-
-
-def needs_outro_options(run_mode: str, target_stage: str | None) -> bool:
-    if run_mode == "full":
-        return True
-    if target_stage == "compose":
-        return True
-    return run_mode == "from" and target_stage in {"profile", "voice", "timeline"}
 
 
 def needs_profile_creation_inputs(
@@ -168,15 +188,15 @@ def is_text_file_input(path_text: str | None) -> bool:
     return bool(path_text) and Path(str(path_text)).suffix.lower() == ".txt"
 
 
-def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
+def resolve_initial_args(
+    raw_config: dict[str, Any], run_mode: str, target_stage: str | None
+) -> dict[str, Any]:
     config: dict[str, Any] = {}
-    run_mode = args.run_mode
-    target_stage = args.target_stage
 
     config["ppt"] = None
-    config["page"] = args.page
+    config["page"] = raw_config.get("page")
     config["video"] = None
-    config["title_mode"] = args.title_mode
+    config["title_mode"] = raw_config.get("title_mode")
     config["title_indices"] = set()
     config["spoken_json"] = None
     config["timeline"] = None
@@ -184,104 +204,87 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["outro_profile"] = None
 
     if needs_text_inputs(run_mode, target_stage):
-        config["ppt"] = (
-            validate_existing_file(args.ppt, "document path")
-            if args.ppt
-            else prompt_existing_path("Document path (.pptx or .txt)")
+        config["ppt"] = validate_existing_file(
+            require_config_value(raw_config, "ppt", "document path"),
+            "document path",
         )
         if is_text_file_input(config["ppt"]):
-            config["page"] = args.page or 1
+            config["page"] = raw_config.get("page") or 1
         else:
-            config["page"] = args.page or int(prompt_text("Page number"))
-        title_mode = args.title_mode or prompt_choice(
-            "Title mode\n- first: treat the first paragraph as title\n- none: treat all paragraphs as narration\n- manual: choose title paragraph indices manually\nChoice",
-            ["first", "none", "manual"],
-            default="first",
-        )
+            config["page"] = int(require_config_value(raw_config, "page", "page"))
+        title_mode = raw_config.get("title_mode") or "first"
+        if title_mode not in {"first", "none", "manual"}:
+            raise ValueError("title_mode must be one of: first, none, manual")
         config["title_mode"] = title_mode
         if title_mode == "manual":
-            raw_indices = args.title_indices or prompt_text(
-                "Title paragraph indices (comma separated)", default="1"
+            raw_indices = require_config_value(
+                raw_config, "title_indices", "title_indices"
             )
         elif title_mode == "first":
             raw_indices = "1"
         else:
             raw_indices = ""
-        config["title_indices"] = parse_title_indices(raw_indices)
+        config["title_indices"] = parse_title_indices(str(raw_indices))
     elif target_stage in {"profile", "voice", "timeline"} and run_mode == "from":
-        config["spoken_json"] = (
-            validate_existing_file(args.spoken_json, "spoken json")
-            if args.spoken_json
-            else prompt_existing_path("Spoken JSON path")
+        config["spoken_json"] = validate_existing_file(
+            require_config_value(raw_config, "spoken_json", "spoken json"),
+            "spoken json",
         )
         if target_stage == "timeline":
-            config["segments_manifest"] = (
-                validate_existing_file(args.segments_manifest, "segments manifest")
-                if args.segments_manifest
-                else prompt_existing_path("Segments manifest path")
+            config["segments_manifest"] = validate_existing_file(
+                require_config_value(
+                    raw_config, "segments_manifest", "segments manifest"
+                ),
+                "segments manifest",
             )
     elif target_stage in {"voice", "timeline"}:
-        config["spoken_json"] = (
-            validate_existing_file(args.spoken_json, "spoken json")
-            if args.spoken_json
-            else prompt_existing_path("Spoken JSON path")
+        config["spoken_json"] = validate_existing_file(
+            require_config_value(raw_config, "spoken_json", "spoken json"),
+            "spoken json",
         )
     elif target_stage == "compose":
-        config["timeline"] = (
-            validate_existing_file(args.timeline, "timeline json")
-            if args.timeline
-            else prompt_existing_path("Timeline JSON path")
+        config["timeline"] = validate_existing_file(
+            require_config_value(raw_config, "timeline", "timeline json"),
+            "timeline json",
         )
-        config["segments_manifest"] = (
-            validate_existing_file(args.segments_manifest, "segments manifest")
-            if args.segments_manifest
-            else prompt_existing_path("Segments manifest path")
+        config["segments_manifest"] = validate_existing_file(
+            require_config_value(raw_config, "segments_manifest", "segments manifest"),
+            "segments manifest",
         )
 
     if needs_video_input(run_mode, target_stage):
-        config["video"] = (
-            validate_existing_file(args.video, "video path")
-            if args.video
-            else prompt_existing_path("Target video path")
+        config["video"] = validate_existing_file(
+            require_config_value(raw_config, "video", "video path"),
+            "video path",
         )
 
-    profile = args.profile
-    voice_name = args.voice_name
-    ref_audio = args.ref_audio
-    ref_text = args.ref_text
+    profile = raw_config.get("profile")
+    voice_name = raw_config.get("voice_name")
+    ref_audio = raw_config.get("ref_audio")
+    ref_text = raw_config.get("ref_text")
 
     if target_stage == "voice":
         if not profile:
-            profile = prompt_existing_path(
-                "Voice profile path (.pt file or profile directory)",
-                kinds=("file", "dir"),
-            )
+            raise ValueError("profile is required for only-stage voice.")
     elif needs_profile_creation_inputs(run_mode, config, target_stage):
-        voice_name = voice_name or prompt_text("Voice name")
+        voice_name = require_config_value(raw_config, "voice_name", "voice name")
         ref_audio = (
             validate_existing_file(ref_audio, "reference audio path")
             if ref_audio
-            else prompt_existing_path(
-                "Reference audio path (recommended 10-20 seconds)"
+            else validate_existing_file(
+                require_config_value(raw_config, "ref_audio", "reference audio path"),
+                "reference audio path",
             )
         )
-        ref_text = ref_text or prompt_text("Reference text")
+        ref_text = require_config_value(raw_config, "ref_text", "reference text")
     elif run_mode == "full":
         if not profile:
-            has_profile = prompt_choice(
-                "Do you already have a voice profile file", ["y", "n"], default="y"
+            voice_name = require_config_value(raw_config, "voice_name", "voice name")
+            ref_audio = validate_existing_file(
+                require_config_value(raw_config, "ref_audio", "reference audio path"),
+                "reference audio path",
             )
-            if has_profile == "y":
-                profile = prompt_existing_path(
-                    "Voice profile path (.pt file or profile directory)",
-                    kinds=("file", "dir"),
-                )
-            else:
-                voice_name = voice_name or prompt_text("Voice name")
-                ref_audio = ref_audio or prompt_existing_path(
-                    "Reference audio path (recommended 10-20 seconds)"
-                )
-                ref_text = ref_text or prompt_text("Reference text")
+            ref_text = require_config_value(raw_config, "ref_text", "reference text")
 
     config["profile"] = str(resolve_profile_path(profile)) if profile else None
     config["voice_name"] = voice_name
@@ -290,126 +293,64 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     )
     config["ref_text"] = ref_text
 
-    config["stage1_output_dir"] = args.stage1_output_dir
-    config["profile_output_dir"] = args.profile_output_dir
-    config["voice_output_dir"] = args.voice_output_dir
-    config["timeline_output"] = args.timeline_output
-    config["timeline_debug_dir"] = args.timeline_debug_dir
-    config["compose_output_dir"] = args.compose_output_dir
+    config["stage1_output_dir"] = raw_config.get("stage1_output_dir")
+    config["profile_output_dir"] = raw_config.get("profile_output_dir")
+    config["voice_output_dir"] = raw_config.get("voice_output_dir")
+    config["timeline_output"] = raw_config.get("timeline_output")
+    config["timeline_debug_dir"] = raw_config.get("timeline_debug_dir")
+    config["compose_output_dir"] = raw_config.get("compose_output_dir")
     cover_image = (
-        validate_existing_file(args.cover_image, "cover image") if args.cover_image else None
+        validate_existing_file(raw_config["cover_image"], "cover image")
+        if raw_config.get("cover_image")
+        else None
     )
-    cover_duration_sec = args.cover_duration_sec
-    cover_paragraph_index = args.cover_paragraph_index
-    if cover_image is None and needs_cover_options(run_mode, target_stage):
-        use_cover = prompt_choice(
-            "Do you want to prepend a cover image before the main video",
-            ["y", "n"],
-            default="n",
-        )
-        if use_cover == "y":
-            cover_image = prompt_existing_path("Cover image path")
-            cover_paragraph_index = int(
-                prompt_text(
-                    "Cover paragraph index",
-                    default=str(cover_paragraph_index or 2),
-                )
-            )
-            if cover_duration_sec is None:
-                raw_cover_duration = prompt_text(
-                    "Optional cover duration in seconds (empty means use cover paragraph audio duration)",
-                    default="",
-                    required=False,
-                ).strip()
-                cover_duration_sec = float(raw_cover_duration) if raw_cover_duration else None
-        else:
-            cover_paragraph_index = None
-            cover_duration_sec = None
+    cover_duration_sec = raw_config.get("cover_duration_sec")
+    if cover_duration_sec == 0:
+        cover_duration_sec = None
+    cover_paragraph_index = raw_config.get("cover_paragraph_index") or 2
+    if cover_image is None:
+        cover_paragraph_index = None
+        cover_duration_sec = None
     config["cover_image"] = cover_image
     config["cover_duration_sec"] = cover_duration_sec
     config["cover_paragraph_index"] = cover_paragraph_index
     outro_image = (
-        validate_existing_file(args.outro_image, "outro image") if args.outro_image else None
+        validate_existing_file(raw_config["outro_image"], "outro image")
+        if raw_config.get("outro_image")
+        else None
     )
     outro_audio = (
-        validate_existing_file(args.outro_audio, "outro audio") if args.outro_audio else None
+        validate_existing_file(raw_config["outro_audio"], "outro audio")
+        if raw_config.get("outro_audio")
+        else None
     )
-    outro_text = args.outro_text
+    outro_text = raw_config.get("outro_text")
     outro_profile = (
-        validate_existing_path(args.outro_profile, "outro profile", kinds=("file", "dir"))
-        if args.outro_profile
+        validate_existing_path(
+            raw_config["outro_profile"], "outro profile", kinds=("file", "dir")
+        )
+        if raw_config.get("outro_profile")
         else None
     )
     if outro_image is not None and outro_audio is None and not outro_text:
-        has_fixed_outro_audio = prompt_choice(
-            "Do you already have a fixed outro slogan audio",
-            ["y", "n"],
-            default="y",
-        )
-        if has_fixed_outro_audio == "y":
-            outro_audio = prompt_existing_path("Outro audio path")
-        else:
-            outro_text = prompt_text("Outro slogan text")
-            if run_mode in {"only", "from"} and target_stage in {"compose", "timeline"} and not config.get("profile"):
-                outro_profile = prompt_existing_path(
-                    "Voice profile path for outro generation (.pt file or profile directory)",
-                    kinds=("file", "dir"),
-                )
-    if outro_image is None and needs_outro_options(run_mode, target_stage):
-        use_outro = prompt_choice(
-            "Do you want to append an outro page after the main video",
-            ["y", "n"],
-            default="n",
-        )
-        if use_outro == "y":
-            outro_image = prompt_existing_path("Outro image path")
-            has_fixed_outro_audio = prompt_choice(
-                "Do you already have a fixed outro slogan audio",
-                ["y", "n"],
-                default="y",
-            )
-            if has_fixed_outro_audio == "y":
-                outro_audio = prompt_existing_path("Outro audio path")
-            else:
-                outro_text = outro_text or prompt_text("Outro slogan text")
-                if run_mode in {"only", "from"} and target_stage in {"compose", "timeline"} and not config.get("profile"):
-                    outro_profile = prompt_existing_path(
-                        "Voice profile path for outro generation (.pt file or profile directory)",
-                        kinds=("file", "dir"),
-                    )
-        else:
-            outro_audio = None
-            outro_text = None
-            outro_profile = None
+        raise ValueError("outro_image requires either outro_audio or outro_text.")
     config["outro_image"] = outro_image
     config["outro_audio"] = outro_audio
     config["outro_text"] = outro_text
     config["outro_profile"] = outro_profile
-    config["paragraphs"] = args.paragraphs
-    config["volume_gain"] = args.volume_gain
-    config["probe_mode"] = args.probe_mode
-    if (
-        run_mode == "full"
-        or target_stage in {"timeline"}
-        or (run_mode == "from" and target_stage in {"profile", "voice"})
-    ):
-        config["probe_times"] = args.probe_times or prompt_text(
-            "Initial probe times (comma separated, keyframe times)",
-            default="0,10,20,30",
-        )
-        config["api_key"] = args.api_key or read_env_key("MAAS_API_KEY")
-        if not config["api_key"]:
-            config["api_key"] = prompt_text("MAAS_API_KEY", required=True)
-    else:
-        config["probe_times"] = args.probe_times
-        config["api_key"] = args.api_key or read_env_key("MAAS_API_KEY")
+    config["paragraphs"] = raw_config.get("paragraphs")
+    config["volume_gain"] = raw_config.get("volume_gain")
+    config["probe_mode"] = raw_config.get("probe_mode") or "keyframes"
+    config["probe_times"] = raw_config.get("probe_times")
+    config["api_key"] = raw_config.get("api_key") or read_env_key("MAAS_API_KEY")
     return config
 
 
 def summarize_initial_inputs(
     config: dict[str, Any], run_mode: str, target_stage: str | None
 ) -> list[str]:
-    lines = [f"run_mode: {run_mode}"]
+    display_run_mode = "all" if run_mode == "full" else run_mode
+    lines = [f"run_mode: {display_run_mode}"]
     if target_stage is not None:
         lines.append(f"target_stage: {target_stage}")
 
@@ -475,173 +416,6 @@ def summarize_initial_inputs(
         + ("set" if config.get("api_key") else "not set")
     )
     return lines
-
-
-def confirm_initial_inputs(
-    config: dict[str, Any], run_mode: str, target_stage: str | None
-) -> str:
-    print()
-    print("Collected inputs:")
-    for line in summarize_initial_inputs(config, run_mode, target_stage):
-        print(f"- {line}")
-    return prompt_choice(
-        "Input action\n- c: continue\n- e: edit inputs for this run\n- s: stop here\nChoice",
-        ["c", "e", "s"],
-        default="c",
-    )
-
-
-def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    args.ppt = config.get("ppt")
-    args.page = config.get("page")
-    args.video = config.get("video")
-    args.title_mode = config.get("title_mode")
-    title_indices = sorted(config.get("title_indices", []))
-    args.title_indices = ",".join(str(item) for item in title_indices) if title_indices else None
-    args.spoken_json = config.get("spoken_json")
-    args.timeline = config.get("timeline")
-    args.segments_manifest = config.get("segments_manifest")
-    args.profile = config.get("profile")
-    args.voice_name = config.get("voice_name")
-    args.ref_audio = config.get("ref_audio")
-    args.ref_text = config.get("ref_text")
-    args.cover_image = config.get("cover_image")
-    args.cover_duration_sec = config.get("cover_duration_sec")
-    args.cover_paragraph_index = config.get("cover_paragraph_index")
-    args.outro_image = config.get("outro_image")
-    args.outro_audio = config.get("outro_audio")
-    args.outro_text = config.get("outro_text")
-    args.outro_profile = config.get("outro_profile")
-    args.paragraphs = config.get("paragraphs")
-    args.volume_gain = config.get("volume_gain")
-    args.probe_mode = config.get("probe_mode")
-    args.probe_times = config.get("probe_times")
-    args.api_key = config.get("api_key")
-
-
-def available_edit_sections(
-    config: dict[str, Any], run_mode: str, target_stage: str | None
-) -> list[tuple[str, str]]:
-    sections: list[tuple[str, str]] = []
-    if needs_text_inputs(run_mode, target_stage):
-        sections.append(("text", "text inputs"))
-    if config.get("spoken_json") or config.get("timeline") or config.get("segments_manifest"):
-        sections.append(("paths", "stage paths"))
-    if config.get("video"):
-        sections.append(("video", "video path"))
-    if (
-        config.get("profile")
-        or config.get("voice_name")
-        or config.get("ref_audio")
-        or config.get("ref_text")
-        or target_stage in {"profile", "voice"}
-        or run_mode == "full"
-    ):
-        sections.append(("profile", "voice/profile inputs"))
-    if needs_cover_options(run_mode, target_stage):
-        sections.append(("cover", "cover intro"))
-    if needs_outro_options(run_mode, target_stage):
-        sections.append(("outro", "outro page"))
-    if config.get("probe_times") or run_mode == "full" or target_stage in {"timeline"}:
-        sections.append(("probe", "timeline probe"))
-    seen: set[str] = set()
-    unique_sections: list[tuple[str, str]] = []
-    for key, label in sections:
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_sections.append((key, label))
-    return unique_sections
-
-
-def ask_edit_section(
-    config: dict[str, Any], run_mode: str, target_stage: str | None
-) -> str:
-    sections = available_edit_sections(config, run_mode, target_stage)
-    if len(sections) == 1:
-        return sections[0][0]
-    print()
-    print("Edit which section:")
-    for key, label in sections:
-        print(f"- {key}: {label}")
-    return prompt_choice(
-        "Section",
-        [key for key, _ in sections],
-        default=sections[0][0],
-    )
-
-
-def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
-    if section == "text":
-        args.ppt = None
-        args.page = None
-        args.title_mode = None
-        args.title_indices = None
-        return
-    if section == "paths":
-        args.spoken_json = None
-        args.timeline = None
-        args.segments_manifest = None
-        return
-    if section == "video":
-        args.video = None
-        return
-    if section == "profile":
-        args.profile = None
-        args.voice_name = None
-        args.ref_audio = None
-        args.ref_text = None
-        return
-    if section == "cover":
-        args.cover_image = None
-        args.cover_duration_sec = None
-        args.cover_paragraph_index = 2
-        return
-    if section == "outro":
-        args.outro_image = None
-        args.outro_audio = None
-        args.outro_text = None
-        args.outro_profile = None
-        return
-    if section == "probe":
-        args.probe_times = None
-        args.api_key = None
-        return
-
-
-def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
-    if args.only_stage and args.from_stage:
-        raise ValueError("Use either --only-stage or --from-stage, not both.")
-
-    if args.only_stage:
-        target_stage = STAGE_ALIASES.get(args.only_stage, args.only_stage)
-        if target_stage in {"text", "profile", "voice", "timeline", "compose"}:
-            return "only", target_stage
-        raise ValueError(
-            "Unsupported --only-stage value. Use one of: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose"
-        )
-
-    if args.from_stage:
-        target_stage = STAGE_ALIASES.get(args.from_stage, args.from_stage)
-        if target_stage in {"text", "profile", "voice", "timeline", "compose"}:
-            return "from", target_stage
-        raise ValueError(
-            "Unsupported --from-stage value. Use one of: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose"
-        )
-
-    run_mode = prompt_choice(
-        "Run mode\n- full: run the full pipeline\n- only: run only one stage\n- from: start from one stage and continue\nChoice",
-        RUN_MODE_CHOICES,
-        default="full",
-    )
-    if run_mode == "full":
-        return "full", None
-    target_stage = prompt_choice(
-        "Choose stage",
-        STAGE_SELECTION_CHOICES,
-        default="voice" if run_mode == "from" else "text",
-    )
-    return run_mode, target_stage
 
 
 def ensure_profile_path(config: dict[str, Any]) -> Path:
@@ -874,6 +648,8 @@ def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_stage2_profile(config: dict[str, Any]) -> Path:
+    from voice_process.run_voice_profile import run_voice_profile
+
     return run_voice_profile(
         voice_name=config["voice_name"],
         ref_audio=config["ref_audio"],
@@ -891,6 +667,8 @@ def run_stage2_voice(
     paragraph_indices: list[int] | None = None,
     volume_gain: float | None = None,
 ) -> Path:
+    from voice_process.run_voice_generate import run_voice_generate
+
     if not paragraph_indices:
         result = run_voice_generate(
             spoken_json=spoken_json,
@@ -980,6 +758,15 @@ def generate_outro_audio(config: dict[str, Any], output_dir: Path) -> Path | Non
     if not config.get("outro_text"):
         return None
 
+    import soundfile as sf
+
+    from voice_process.common import (
+        load_model,
+        load_prompt_file,
+        synthesize_segment_wavs,
+        write_json,
+    )
+
     profile_path = resolve_outro_profile_path(config)
     prompt_items = load_prompt_file(profile_path)
     tts = load_model()
@@ -1036,66 +823,25 @@ def run_stage4(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Interactive NarrateFlow pipeline")
-    parser.add_argument("--ppt")
-    parser.add_argument("--input", dest="ppt")
-    parser.add_argument("--page", type=int)
-    parser.add_argument("--video")
-    parser.add_argument("--profile")
-    parser.add_argument("--voice-name")
-    parser.add_argument("--ref-audio")
-    parser.add_argument("--ref-text")
-    parser.add_argument("--title-mode", choices=["first", "none", "manual"])
-    parser.add_argument("--title-indices")
-    parser.add_argument("--stage1-output-dir")
-    parser.add_argument("--profile-output-dir")
-    parser.add_argument("--voice-output-dir")
-    parser.add_argument("--spoken-json")
-    parser.add_argument("--timeline")
-    parser.add_argument("--segments-manifest")
-    parser.add_argument("--timeline-output")
-    parser.add_argument("--timeline-debug-dir")
-    parser.add_argument("--compose-output-dir")
-    parser.add_argument("--cover-image")
-    parser.add_argument("--cover-duration-sec", type=float)
-    parser.add_argument("--cover-paragraph-index", type=int, default=2)
-    parser.add_argument("--outro-image")
-    parser.add_argument("--outro-audio")
-    parser.add_argument("--outro-text")
-    parser.add_argument("--outro-profile")
-    parser.add_argument("--paragraphs")
-    parser.add_argument("--volume-gain", type=float)
+    parser = argparse.ArgumentParser(description="NarrateFlow pipeline")
     parser.add_argument(
-        "--probe-mode", choices=["keyframes", "times"], default="keyframes"
-    )
-    parser.add_argument("--probe-times")
-    parser.add_argument("--api-key")
-    parser.add_argument(
-        "--only-stage",
-        help="Run only one stage. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
-    )
-    parser.add_argument(
-        "--from-stage",
-        help="Start from one stage and continue. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Pipeline config TOML path. Exactly one of [all], [only], or [from] must be active.",
     )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    run_mode, target_stage = resolve_run_plan(args)
-    args.run_mode = run_mode
-    args.target_stage = target_stage
-    while True:
-        config = resolve_initial_args(args)
-        sync_config_to_args(args, config)
-        input_action = confirm_initial_inputs(config, run_mode, target_stage)
-        if input_action == "c":
-            break
-        if input_action == "s":
-            return
-        section = ask_edit_section(config, run_mode, target_stage)
-        clear_args_for_section(args, section)
+    run_mode, target_stage, raw_config = load_pipeline_config(Path(args.config))
+    config = resolve_initial_args(raw_config, run_mode, target_stage)
+
+    print()
+    print(f"Loaded config: {args.config}")
+    print("Collected inputs:")
+    for line in summarize_initial_inputs(config, run_mode, target_stage):
+        print(f"- {line}")
 
     total = 5
 
