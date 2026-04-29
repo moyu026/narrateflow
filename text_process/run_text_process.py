@@ -293,6 +293,11 @@ def extract_txt_paragraphs(text_path: Path) -> list[dict[str, Any]]:
         if not paragraph:
             continue
         timeline_start_sec, clean_text = parse_timestamp_prefix(paragraph)
+        if idx > 0 and timeline_start_sec is None:
+            raise ValueError(
+                "TXT 时间戳模式要求第 2 段及之后每个段落都带开始时间戳，"
+                f"缺少段落: {idx + 1}"
+            )
         item: dict[str, Any] = {"index": idx + 1, "text": clean_text}
         if timeline_start_sec is not None:
             item["timeline_start_sec"] = timeline_start_sec
