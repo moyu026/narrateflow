@@ -80,7 +80,9 @@ def build_direct_track(
     matched = [
         item
         for item in timeline
-        if item.get("matched") and int(item["paragraph_index"]) in segment_map
+        if item.get("matched")
+        and not item.get("is_cover")
+        and int(item["paragraph_index"]) in segment_map
     ]
     matched.sort(
         key=lambda item: (
@@ -145,23 +147,24 @@ def build_retime_segments(
     matched = [
         item
         for item in timeline
-        if item.get("matched") and int(item["paragraph_index"]) in segment_map
+        if item.get("matched") and not item.get("is_cover")
     ]
     matched.sort(key=lambda item: float(item.get("start", item.get("anchor_start"))))
     segments = []
     for i, item in enumerate(matched):
         start = float(item.get("start", item.get("anchor_start")))
-        next_start = (
-            float(matched[i + 1].get("start", matched[i + 1].get("anchor_start")))
-            if i + 1 < len(matched)
-            else video_duration
-        )
+        next_start = resolve_end_hint(item, video_duration)
         source_duration = max(0.01, next_start - start)
-        audio_meta = segment_map[int(item["paragraph_index"])]
-        audio_duration = float(audio_meta["duration"])
+        audio_meta = segment_map.get(int(item["paragraph_index"]))
+        audio_duration = float(audio_meta["duration"]) if audio_meta is not None else 0.0
+        is_silent = bool(item.get("is_silent")) or audio_meta is None
         effective_buffer = tail_buffer_sec if i + 1 == len(matched) else buffer_sec
-        desired_duration = max(source_duration, audio_duration + effective_buffer)
-        retime_factor = desired_duration / source_duration
+        desired_duration = (
+            source_duration
+            if is_silent
+            else max(source_duration, audio_duration + effective_buffer)
+        )
+        retime_factor = desired_duration / source_duration if source_duration else 1.0
         output_duration = source_duration * retime_factor
         segments.append(
             {
@@ -178,7 +181,8 @@ def build_retime_segments(
                 "output_duration": round(output_duration, 3),
                 "retime_factor": round(retime_factor, 4),
                 "needs_review": bool(audio_duration > output_duration + 0.05),
-                "segment_wav": audio_meta["wav_path"],
+                "segment_wav": audio_meta["wav_path"] if audio_meta is not None else None,
+                "is_silent": is_silent,
             }
         )
     return segments
@@ -191,14 +195,15 @@ def build_retime_track(
     placements = []
     cursor = 0.0
     for segment in segments:
-        wav, sr = sf.read(segment["segment_wav"], dtype="float32")
-        if int(sr) != sample_rate:
-            raise RuntimeError("segment sample rate mismatch")
-        wav = np.asarray(wav, dtype=np.float32)
         segment_samples = int(round(float(segment["output_duration"]) * sample_rate))
         chunk = np.zeros(segment_samples, dtype=np.float32)
-        copy_len = min(len(wav), len(chunk))
-        chunk[:copy_len] = wav[:copy_len]
+        if segment.get("segment_wav"):
+            wav, sr = sf.read(segment["segment_wav"], dtype="float32")
+            if int(sr) != sample_rate:
+                raise RuntimeError("segment sample rate mismatch")
+            wav = np.asarray(wav, dtype=np.float32)
+            copy_len = min(len(wav), len(chunk))
+            chunk[:copy_len] = wav[:copy_len]
         parts.append(chunk)
         placements.append(
             {
@@ -211,6 +216,7 @@ def build_retime_track(
                 "retime_factor": segment["retime_factor"],
                 "needs_review": segment["needs_review"],
                 "segment_wav": segment["segment_wav"],
+                "is_silent": bool(segment.get("is_silent", False)),
             }
         )
         cursor += float(segment["output_duration"])

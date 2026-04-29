@@ -13,6 +13,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 import torch
+from tqdm.auto import tqdm
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -245,31 +246,41 @@ def synthesize_segment_wavs(
     adjusted: list[np.ndarray] = []
     sample_rate: int | None = None
     batch_size = max(1, int(batch_size))
+    progress = tqdm(
+        total=len(segments),
+        desc="Generating voice",
+        unit="segment",
+        leave=False,
+    )
 
-    for start in range(0, len(segments), batch_size):
-        batch = segments[start : start + batch_size]
-        texts = [segment["spoken_text"] for segment in batch]
-        batch_prompt_items = (
-            prompt_items * len(batch)
-            if len(prompt_items) == 1
-            else prompt_items[start : start + len(batch)]
-        )
-        wavs, batch_sample_rate = tts.generate_voice_clone(
-            text=texts,
-            language=[language] * len(texts),
-            voice_clone_prompt=batch_prompt_items,
-            max_new_tokens=max_new_tokens,
-        )
-        if sample_rate is None:
-            sample_rate = batch_sample_rate
-        adjusted.extend(
-            apply_speed(np.asarray(wav, dtype=np.float32), speed=speed) for wav in wavs
-        )
-        if hasattr(__import__("torch"), "cuda"):
-            import torch
+    try:
+        for start in range(0, len(segments), batch_size):
+            batch = segments[start : start + batch_size]
+            texts = [segment["spoken_text"] for segment in batch]
+            batch_prompt_items = (
+                prompt_items * len(batch)
+                if len(prompt_items) == 1
+                else prompt_items[start : start + len(batch)]
+            )
+            wavs, batch_sample_rate = tts.generate_voice_clone(
+                text=texts,
+                language=[language] * len(texts),
+                voice_clone_prompt=batch_prompt_items,
+                max_new_tokens=max_new_tokens,
+            )
+            if sample_rate is None:
+                sample_rate = batch_sample_rate
+            adjusted.extend(
+                apply_speed(np.asarray(wav, dtype=np.float32), speed=speed) for wav in wavs
+            )
+            progress.update(len(batch))
+            if hasattr(__import__("torch"), "cuda"):
+                import torch
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+    finally:
+        progress.close()
 
     if sample_rate is None:
         raise RuntimeError("分段合成失败，未返回采样率。")

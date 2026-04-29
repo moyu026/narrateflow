@@ -30,6 +30,52 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def build_video_context_timeline(spoken_json: Path) -> dict[str, Any]:
+    payload = load_json(spoken_json)
+    paragraphs = payload.get("paragraphs", [])
+    segments: list[dict[str, Any]] = []
+    voice_count = 0
+    matched_count = 0
+    for paragraph in paragraphs:
+        is_silent = bool(paragraph.get("is_silent", False))
+        is_cover = bool(paragraph.get("is_cover", False))
+        matched = paragraph.get("start_time") is not None and paragraph.get("end_time") is not None
+        if matched:
+            matched_count += 1
+        voice_count += 1
+        segments.append(
+            {
+                "paragraph_index": int(paragraph["index"]),
+                "spoken_text": paragraph.get("spoken_text", ""),
+                "timeline_enabled": True,
+                "matched": matched,
+                "start": round(float(paragraph.get("start_time", 0.0)), 3) if matched else None,
+                "end_hint": round(float(paragraph.get("end_time", 0.0)), 3) if matched else None,
+                "review_status": "auto" if matched else "needs_manual",
+                "is_silent": is_silent,
+                "is_cover": is_cover,
+                "source": "video_window" if not is_cover else "cover_window",
+            }
+        )
+    return {
+        "spoken_json": str(spoken_json),
+        "page": int(payload.get("page", 1)),
+        "status": "complete" if voice_count == matched_count else "incomplete",
+        "voice_count": voice_count,
+        "matched_count": matched_count,
+        "missing_paragraph_indices": [
+            int(item["paragraph_index"]) for item in segments if not item.get("matched")
+        ],
+        "cover_paragraph_index": payload.get("cover_paragraph_index"),
+        "segments": segments,
+        "notes": [
+            "video_context_windows 模式直接信任 spoken.json 中的 start_time/end_time。",
+            "is_cover 段用于封面语音前缀；主视频时间轴从后续窗口开始。",
+            "is_silent 段保留时间窗，但不会在 TTS 阶段生成音频。",
+        ],
+    }
+
+
 def auto_select_probe_times(
     keyframes_json: Path, desired_count: int = 8
 ) -> list[float]:
@@ -580,6 +626,12 @@ def run_timeline_align(
     gap_start_only: bool = True,
     cover_paragraph_index: int | None = None,
 ) -> dict[str, Any]:
+    spoken_payload = load_json(spoken_json)
+    if spoken_payload.get("source_type") == "video_context_windows":
+        public_payload = build_video_context_timeline(spoken_json)
+        write_json(output, public_payload)
+        return public_payload
+
     body_start_paragraph_index = (
         int(cover_paragraph_index) + 1 if cover_paragraph_index is not None else 2
     )

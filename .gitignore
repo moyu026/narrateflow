@@ -39,6 +39,10 @@ dist/
 # Local scripts and temp files
 tmp/
 debug/
+frames/
+tests/
+pic.py
+extract.py
 
 # Generated outputs
 outputs/

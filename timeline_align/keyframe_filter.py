@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from tqdm.auto import tqdm
 
 
 def compute_change_score(curr: np.ndarray, prev: np.ndarray) -> float:
@@ -93,6 +94,7 @@ def sample_keyframes(
     duration = frame_count / fps if fps else 0.0
     stride = max(1, int(round(fps / fps_sample)))
     min_gap_frames = int(round(min_gap_sec * fps))
+    sampled_steps = max(1, int(np.ceil(frame_count / stride))) if frame_count else None
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,57 +102,67 @@ def sample_keyframes(
     last_keep_frame = -(10**9)
     candidates: list[dict] = []
     index = 0
+    progress = tqdm(
+        total=sampled_steps,
+        desc="Extracting keyframes",
+        unit="sample",
+        leave=False,
+    )
 
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if index % stride != 0:
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if index % stride != 0:
+                index += 1
+                continue
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+            if prev_gray is None:
+                global_score = 999.0
+                text_like_score = 999.0
+            else:
+                global_score = compute_change_score(gray, prev_gray)
+                text_like_score = compute_text_like_score(gray, prev_gray)
+
+            should_keep = False
+            reason = []
+            if index - last_keep_frame >= min_gap_frames:
+                if global_score >= global_threshold:
+                    should_keep = True
+                    reason.append("global_change")
+                if text_like_score >= subtitle_threshold:
+                    should_keep = True
+                    reason.append("text_like_change")
+
+            if should_keep:
+                timestamp = round(index / fps, 2)
+                image_path = out_dir / f"kf_{timestamp:07.2f}.png"
+                cv2.imwrite(str(image_path), frame)
+                frame_type = (
+                    "text_like_change" if "text_like_change" in reason else "scene_change"
+                )
+                candidates.append(
+                    {
+                        "time": timestamp,
+                        "frame_index": index,
+                        "image_path": str(image_path),
+                        "global_score": round(global_score, 3),
+                        "text_like_score": round(text_like_score, 3),
+                        "reason": reason,
+                        "type": frame_type,
+                    }
+                )
+                last_keep_frame = index
+
+            prev_gray = gray
             index += 1
-            continue
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        if prev_gray is None:
-            global_score = 999.0
-            text_like_score = 999.0
-        else:
-            global_score = compute_change_score(gray, prev_gray)
-            text_like_score = compute_text_like_score(gray, prev_gray)
-
-        should_keep = False
-        reason = []
-        if index - last_keep_frame >= min_gap_frames:
-            if global_score >= global_threshold:
-                should_keep = True
-                reason.append("global_change")
-            if text_like_score >= subtitle_threshold:
-                should_keep = True
-                reason.append("text_like_change")
-
-        if should_keep:
-            timestamp = round(index / fps, 2)
-            image_path = out_dir / f"kf_{timestamp:07.2f}.png"
-            cv2.imwrite(str(image_path), frame)
-            frame_type = (
-                "text_like_change" if "text_like_change" in reason else "scene_change"
-            )
-            candidates.append(
-                {
-                    "time": timestamp,
-                    "frame_index": index,
-                    "image_path": str(image_path),
-                    "global_score": round(global_score, 3),
-                    "text_like_score": round(text_like_score, 3),
-                    "reason": reason,
-                    "type": frame_type,
-                }
-            )
-            last_keep_frame = index
-
-        prev_gray = gray
-        index += 1
+            progress.update(1)
+    finally:
+        progress.close()
 
     candidates = insert_stable_fill_candidates(candidates, cap, fps, out_dir)
     cap.release()

@@ -6,13 +6,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-import soundfile as sf
-
 from text_process.run_text_process import prepare_ppt_page, slugify
-from voice_process.common import load_model, load_prompt_file, synthesize_segment_wavs, write_json
-from voice_process.run_voice_profile import run_voice_profile
-from voice_process.run_voice_generate import run_voice_generate
 from timeline_align.run_timeline_align import run_timeline_align
+from timeline_align.video_script import run_video_script_generate
 from video_compose.run_video_compose import run_video_compose
 
 
@@ -33,6 +29,11 @@ STAGE_ALIASES = {
 
 STAGE_SELECTION_CHOICES = ["text", "profile", "voice", "timeline", "compose"]
 RUN_MODE_CHOICES = ["full", "only", "from"]
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def prompt_text(label: str, default: str | None = None, required: bool = True) -> str:
@@ -182,32 +183,42 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["timeline"] = None
     config["segments_manifest"] = None
     config["outro_profile"] = None
+    config["input_mode"] = "document"
+    config["reference_text"] = getattr(args, "reference_text", None)
+    config["enable_ocr"] = bool(getattr(args, "enable_ocr", False))
 
     if needs_text_inputs(run_mode, target_stage):
-        config["ppt"] = (
-            validate_existing_file(args.ppt, "document path")
-            if args.ppt
-            else prompt_existing_path("Document path (.pptx or .txt)")
-        )
-        if is_text_file_input(config["ppt"]):
+        if args.ppt:
+            config["ppt"] = validate_existing_file(args.ppt, "document path")
+        elif args.video:
+            config["ppt"] = None
+            config["input_mode"] = "video_context"
+        else:
+            config["ppt"] = prompt_existing_path("Document path (.pptx or .txt)")
+
+        if config["input_mode"] == "video_context":
+            config["page"] = 1
+            config["title_mode"] = "none"
+            config["title_indices"] = set()
+        elif is_text_file_input(config["ppt"]):
             config["page"] = args.page or 1
         else:
             config["page"] = args.page or int(prompt_text("Page number"))
-        title_mode = args.title_mode or prompt_choice(
-            "Title mode\n- first: treat the first paragraph as title\n- none: treat all paragraphs as narration\n- manual: choose title paragraph indices manually\nChoice",
-            ["first", "none", "manual"],
-            default="first",
-        )
-        config["title_mode"] = title_mode
-        if title_mode == "manual":
-            raw_indices = args.title_indices or prompt_text(
-                "Title paragraph indices (comma separated)", default="1"
+            title_mode = args.title_mode or prompt_choice(
+                "Title mode\n- first: treat the first paragraph as title\n- none: treat all paragraphs as narration\n- manual: choose title paragraph indices manually\nChoice",
+                ["first", "none", "manual"],
+                default="first",
             )
-        elif title_mode == "first":
-            raw_indices = "1"
-        else:
-            raw_indices = ""
-        config["title_indices"] = parse_title_indices(raw_indices)
+            config["title_mode"] = title_mode
+            if title_mode == "manual":
+                raw_indices = args.title_indices or prompt_text(
+                    "Title paragraph indices (comma separated)", default="1"
+                )
+            elif title_mode == "first":
+                raw_indices = "1"
+            else:
+                raw_indices = ""
+            config["title_indices"] = parse_title_indices(raw_indices)
     elif target_stage in {"profile", "voice", "timeline"} and run_mode == "from":
         config["spoken_json"] = (
             validate_existing_file(args.spoken_json, "spoken json")
@@ -325,6 +336,8 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
         else:
             cover_paragraph_index = None
             cover_duration_sec = None
+    elif cover_image is not None and config.get("input_mode") == "video_context":
+        cover_paragraph_index = 1
     config["cover_image"] = cover_image
     config["cover_duration_sec"] = cover_duration_sec
     config["cover_paragraph_index"] = cover_paragraph_index
@@ -397,12 +410,18 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
             "Initial probe times (comma separated, keyframe times)",
             default="0,10,20,30",
         )
-        config["api_key"] = args.api_key or read_env_key("MAAS_API_KEY")
+        env_key_name = (
+            "GEMINI_API_KEY" if config.get("input_mode") == "video_context" else "MAAS_API_KEY"
+        )
+        config["api_key"] = args.api_key or read_env_key(env_key_name)
         if not config["api_key"]:
-            config["api_key"] = prompt_text("MAAS_API_KEY", required=True)
+            config["api_key"] = prompt_text(env_key_name, required=True)
     else:
         config["probe_times"] = args.probe_times
-        config["api_key"] = args.api_key or read_env_key("MAAS_API_KEY")
+        env_key_name = (
+            "GEMINI_API_KEY" if config.get("input_mode") == "video_context" else "MAAS_API_KEY"
+        )
+        config["api_key"] = args.api_key or read_env_key(env_key_name)
     return config
 
 
@@ -414,7 +433,9 @@ def summarize_initial_inputs(
         lines.append(f"target_stage: {target_stage}")
 
     if needs_text_inputs(run_mode, target_stage):
-        lines.append(f"document: {config.get('ppt')}")
+        lines.append(
+            f"document: {config.get('ppt') or '[video-context scripting]'}"
+        )
         lines.append(f"page: {config.get('page')}")
         lines.append(f"title_mode: {config.get('title_mode')}")
         if config.get("title_mode") == "manual":
@@ -431,6 +452,10 @@ def summarize_initial_inputs(
         lines.append(f"segments_manifest: {config.get('segments_manifest')}")
     if config.get("video"):
         lines.append(f"video: {config.get('video')}")
+    if config.get("reference_text"):
+        lines.append(f"reference_text: {config.get('reference_text')}")
+    if config.get("enable_ocr"):
+        lines.append("enable_ocr: true")
 
     if config.get("profile"):
         lines.append(f"profile: {config.get('profile')}")
@@ -505,6 +530,8 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.voice_name = config.get("voice_name")
     args.ref_audio = config.get("ref_audio")
     args.ref_text = config.get("ref_text")
+    args.reference_text = config.get("reference_text")
+    args.enable_ocr = bool(config.get("enable_ocr", False))
     args.cover_image = config.get("cover_image")
     args.cover_duration_sec = config.get("cover_duration_sec")
     args.cover_paragraph_index = config.get("cover_paragraph_index")
@@ -577,6 +604,8 @@ def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
         args.page = None
         args.title_mode = None
         args.title_indices = None
+        args.reference_text = None
+        args.enable_ocr = False
         return
     if section == "paths":
         args.spoken_json = None
@@ -865,6 +894,27 @@ def default_compose_output_dir(source_path: Path, config: dict[str, Any]) -> Pat
 
 
 def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
+    if config.get("input_mode") == "video_context":
+        output_dir = default_stage1_output_dir(config) or (
+            OUTPUTS_DIR / "scripts" / slugify(Path(config["video"]).stem, max_len=60)
+        )
+        debug_dir = (
+            Path(config["timeline_debug_dir"])
+            if config.get("timeline_debug_dir")
+            else OUTPUTS_DIR
+            / "timeline_debug"
+            / slugify(Path(config["video"]).stem, max_len=36)
+        )
+        return run_video_script_generate(
+            video=Path(config["video"]),
+            output_dir=output_dir,
+            debug_dir=debug_dir,
+            gemini_api_key=config.get("api_key"),
+            reference_text_path=Path(config["reference_text"]) if config.get("reference_text") else None,
+            cover_image=Path(config["cover_image"]) if config.get("cover_image") else None,
+            cover_duration_sec=config.get("cover_duration_sec"),
+            enable_ocr=bool(config.get("enable_ocr", False)),
+        )
     return prepare_ppt_page(
         ppt_path=Path(config["ppt"]),
         page=int(config["page"]),
@@ -874,6 +924,8 @@ def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_stage2_profile(config: dict[str, Any]) -> Path:
+    from voice_process.run_voice_profile import run_voice_profile
+
     return run_voice_profile(
         voice_name=config["voice_name"],
         ref_audio=config["ref_audio"],
@@ -891,6 +943,8 @@ def run_stage2_voice(
     paragraph_indices: list[int] | None = None,
     volume_gain: float | None = None,
 ) -> Path:
+    from voice_process.run_voice_generate import run_voice_generate
+
     if not paragraph_indices:
         result = run_voice_generate(
             spoken_json=spoken_json,
@@ -980,6 +1034,10 @@ def generate_outro_audio(config: dict[str, Any], output_dir: Path) -> Path | Non
     if not config.get("outro_text"):
         return None
 
+    import soundfile as sf
+
+    from voice_process.common import load_model, load_prompt_file, synthesize_segment_wavs
+
     profile_path = resolve_outro_profile_path(config)
     prompt_items = load_prompt_file(profile_path)
     tts = load_model()
@@ -1045,6 +1103,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--voice-name")
     parser.add_argument("--ref-audio")
     parser.add_argument("--ref-text")
+    parser.add_argument("--reference-text")
     parser.add_argument("--title-mode", choices=["first", "none", "manual"])
     parser.add_argument("--title-indices")
     parser.add_argument("--stage1-output-dir")
@@ -1070,6 +1129,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--probe-times")
     parser.add_argument("--api-key")
+    parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(
         "--only-stage",
         help="Run only one stage. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
