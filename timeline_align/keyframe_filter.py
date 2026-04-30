@@ -110,6 +110,8 @@ def sample_keyframes(
     min_gap_sec: float = 2.0,
     global_threshold: float = 12.0,
     subtitle_threshold: float = 8.0,
+    detection_max_width: int = DETECTION_MAX_WIDTH,
+    fill_gap_sec: float = 6.0,
 ) -> dict:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -141,7 +143,7 @@ def sample_keyframes(
             index += 1
             continue
 
-        gray = prepare_detection_gray(frame)
+        gray = prepare_detection_gray(frame, max_width=detection_max_width)
 
         if last_kept_gray is None:
             timestamp = round(index / fps, 2)
@@ -208,7 +210,9 @@ def sample_keyframes(
 
         index += 1
 
-    candidates = insert_stable_fill_candidates(candidates, cap, fps, out_dir)
+    candidates = insert_stable_fill_candidates(
+        candidates, cap, fps, out_dir, fill_gap_sec=fill_gap_sec
+    )
     cap.release()
     return {
         "video_path": str(video_path),
@@ -219,6 +223,8 @@ def sample_keyframes(
         "min_gap_sec": min_gap_sec,
         "global_threshold": global_threshold,
         "subtitle_threshold": subtitle_threshold,
+        "detection_max_width": detection_max_width,
+        "fill_gap_sec": fill_gap_sec,
         "candidate_count": len(candidates),
         "candidates": candidates,
     }
@@ -235,6 +241,8 @@ def main() -> None:
     parser.add_argument("--min-gap-sec", type=float, default=2.0)
     parser.add_argument("--global-threshold", type=float, default=12.0)
     parser.add_argument("--subtitle-threshold", type=float, default=8.0)
+    parser.add_argument("--detection-max-width", type=int, default=DETECTION_MAX_WIDTH)
+    parser.add_argument("--fill-gap-sec", type=float, default=6.0)
     args = parser.parse_args()
 
     payload = sample_keyframes(
@@ -245,6 +253,8 @@ def main() -> None:
         min_gap_sec=args.min_gap_sec,
         global_threshold=args.global_threshold,
         subtitle_threshold=args.subtitle_threshold,
+        detection_max_width=args.detection_max_width,
+        fill_gap_sec=args.fill_gap_sec,
     )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

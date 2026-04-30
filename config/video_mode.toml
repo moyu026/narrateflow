@@ -38,6 +38,27 @@ ref_text = ''
 # Example: 30 checks frames 0,30,60...; 1 checks every frame.
 frame_stride = 30
 
+# Optional. Minimum seconds between saved change keyframes.
+# Higher values reduce noisy repeated keyframes; lower values capture rapid UI changes.
+min_gap_sec = 2.0
+
+# Optional. Global image-change threshold.
+# A sampled frame is kept as a scene change when its average grayscale difference
+# from the last kept frame is at least this value.
+global_threshold = 12.0
+
+# Optional. Text/UI-region change threshold.
+# Used when global change is below the global threshold; higher values are stricter.
+subtitle_threshold = 8.0
+
+# Optional. Max width for detection-only resized frames.
+# Saved keyframe images keep original resolution; this only affects similarity scoring.
+detection_max_width = 960
+
+# Optional. Insert low-priority stable_fill frames when saved keyframes are this many
+# seconds apart or more. Set higher to reduce fill frames.
+fill_gap_sec = 6.0
+
 # Optional. Leave empty to read GEMINI_API_KEY from environment or .env.
 api_key = ''
 

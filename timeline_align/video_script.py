@@ -569,6 +569,11 @@ def run_video_script_generate(
     enable_ocr: bool = False,
     batch_size: int = 3,
     frame_stride: int | None = None,
+    min_gap_sec: float = 2.0,
+    global_threshold: float = 12.0,
+    subtitle_threshold: float = 8.0,
+    detection_max_width: int = 960,
+    fill_gap_sec: float = 6.0,
 ) -> dict[str, Any]:
     debug_dir.mkdir(parents=True, exist_ok=True)
     reference_text = read_reference_text(reference_text_path)
@@ -584,6 +589,11 @@ def run_video_script_generate(
         video_path=video,
         out_dir=debug_dir / "keyframes",
         frame_stride=frame_stride,
+        min_gap_sec=min_gap_sec,
+        global_threshold=global_threshold,
+        subtitle_threshold=subtitle_threshold,
+        detection_max_width=detection_max_width,
+        fill_gap_sec=fill_gap_sec,
     )
     write_json(debug_dir / "keyframes.json", keyframes_payload)
     windows.extend(build_video_windows(keyframes_payload))

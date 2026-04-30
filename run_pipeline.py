@@ -233,6 +233,21 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
     frame_stride = empty_to_none(timeline.get("frame_stride"))
     if frame_stride is not None:
         args.frame_stride = int(frame_stride)
+    min_gap_sec = empty_to_none(timeline.get("min_gap_sec"))
+    if min_gap_sec is not None:
+        args.min_gap_sec = float(min_gap_sec)
+    global_threshold = empty_to_none(timeline.get("global_threshold"))
+    if global_threshold is not None:
+        args.global_threshold = float(global_threshold)
+    subtitle_threshold = empty_to_none(timeline.get("subtitle_threshold"))
+    if subtitle_threshold is not None:
+        args.subtitle_threshold = float(subtitle_threshold)
+    detection_max_width = empty_to_none(timeline.get("detection_max_width"))
+    if detection_max_width is not None:
+        args.detection_max_width = int(detection_max_width)
+    fill_gap_sec = empty_to_none(timeline.get("fill_gap_sec"))
+    if fill_gap_sec is not None:
+        args.fill_gap_sec = float(fill_gap_sec)
     args.api_key = empty_to_none(timeline.get("api_key")) or args.api_key
 
     args.stage1_output_dir = empty_to_none(outputs.get("stage1_output_dir"))
@@ -286,6 +301,17 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["reference_text"] = getattr(args, "reference_text", None)
     config["enable_ocr"] = bool(getattr(args, "enable_ocr", False))
     config["frame_stride"] = getattr(args, "frame_stride", None)
+    config["min_gap_sec"] = float(getattr(args, "min_gap_sec", 2.0) or 2.0)
+    config["global_threshold"] = float(
+        getattr(args, "global_threshold", 12.0) or 12.0
+    )
+    config["subtitle_threshold"] = float(
+        getattr(args, "subtitle_threshold", 8.0) or 8.0
+    )
+    config["detection_max_width"] = int(
+        getattr(args, "detection_max_width", 960) or 960
+    )
+    config["fill_gap_sec"] = float(getattr(args, "fill_gap_sec", 6.0) or 6.0)
 
     if needs_script_inputs(run_mode, target_stage):
         config["page"] = 1
@@ -962,6 +988,11 @@ def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
         cover_duration_sec=config.get("cover_duration_sec"),
         enable_ocr=bool(config.get("enable_ocr", False)),
         frame_stride=config.get("frame_stride"),
+        min_gap_sec=float(config.get("min_gap_sec") or 2.0),
+        global_threshold=float(config.get("global_threshold") or 12.0),
+        subtitle_threshold=float(config.get("subtitle_threshold") or 8.0),
+        detection_max_width=int(config.get("detection_max_width") or 960),
+        fill_gap_sec=float(config.get("fill_gap_sec") or 6.0),
     )
 
 
@@ -1162,6 +1193,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--paragraphs")
     parser.add_argument("--volume-gain", type=float)
     parser.add_argument("--frame-stride", type=int)
+    parser.add_argument("--min-gap-sec", type=float, default=2.0)
+    parser.add_argument("--global-threshold", type=float, default=12.0)
+    parser.add_argument("--subtitle-threshold", type=float, default=8.0)
+    parser.add_argument("--detection-max-width", type=int, default=960)
+    parser.add_argument("--fill-gap-sec", type=float, default=6.0)
     parser.add_argument("--api-key")
     parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(
