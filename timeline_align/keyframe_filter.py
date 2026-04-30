@@ -6,7 +6,20 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from tqdm.auto import tqdm
+
+
+DETECTION_MAX_WIDTH = 960
+
+
+def prepare_detection_gray(
+    frame: np.ndarray, max_width: int = DETECTION_MAX_WIDTH
+) -> np.ndarray:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if gray.shape[1] > max_width:
+        scale = max_width / gray.shape[1]
+        height = max(1, int(round(gray.shape[0] * scale)))
+        gray = cv2.resize(gray, (max_width, height), interpolation=cv2.INTER_AREA)
+    return cv2.GaussianBlur(gray, (5, 5), 0)
 
 
 def compute_change_score(curr: np.ndarray, prev: np.ndarray) -> float:
@@ -29,6 +42,12 @@ def extract_text_like_mask(gray: np.ndarray) -> np.ndarray:
 def compute_text_like_score(curr: np.ndarray, prev: np.ndarray) -> float:
     curr_mask = extract_text_like_mask(curr)
     prev_mask = extract_text_like_mask(prev)
+    return compute_text_like_score_from_masks(curr_mask, prev_mask)
+
+
+def compute_text_like_score_from_masks(
+    curr_mask: np.ndarray, prev_mask: np.ndarray
+) -> float:
     diff = cv2.absdiff(curr_mask, prev_mask)
     return float(np.mean(diff))
 
@@ -94,75 +113,89 @@ def sample_keyframes(
     duration = frame_count / fps if fps else 0.0
     stride = max(1, int(round(fps / fps_sample)))
     min_gap_frames = int(round(min_gap_sec * fps))
-    sampled_steps = max(1, int(np.ceil(frame_count / stride))) if frame_count else None
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    prev_gray = None
-    last_keep_frame = -(10**9)
+    last_kept_gray = None
+    last_kept_mask = None
+    last_change_keep_frame = -(10**9)
+    has_change_keep = False
     candidates: list[dict] = []
     index = 0
-    progress = tqdm(
-        total=sampled_steps,
-        desc="Extracting keyframes",
-        unit="sample",
-        leave=False,
-    )
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if index % stride != 0:
+            index += 1
+            continue
 
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if index % stride != 0:
-                index += 1
-                continue
+        gray = prepare_detection_gray(frame)
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        if last_kept_gray is None:
+            timestamp = round(index / fps, 2)
+            image_path = out_dir / f"kf_{timestamp:07.2f}.png"
+            cv2.imwrite(str(image_path), frame)
+            candidates.append(
+                {
+                    "time": timestamp,
+                    "frame_index": index,
+                    "image_path": str(image_path),
+                    "global_score": 0.0,
+                    "text_like_score": 0.0,
+                    "reason": ["first_frame"],
+                    "type": "scene_change",
+                }
+            )
+            last_kept_gray = gray
+            last_kept_mask = extract_text_like_mask(gray)
+            index += 1
+            continue
 
-            if prev_gray is None:
-                global_score = 999.0
-                text_like_score = 999.0
+        global_score = compute_change_score(gray, last_kept_gray)
+        text_like_score = 0.0
+
+        should_keep = False
+        reason = []
+        if not has_change_keep or index - last_change_keep_frame >= min_gap_frames:
+            if global_score >= global_threshold:
+                should_keep = True
+                reason.append("global_change")
             else:
-                global_score = compute_change_score(gray, prev_gray)
-                text_like_score = compute_text_like_score(gray, prev_gray)
-
-            should_keep = False
-            reason = []
-            if index - last_keep_frame >= min_gap_frames:
-                if global_score >= global_threshold:
-                    should_keep = True
-                    reason.append("global_change")
+                curr_mask = extract_text_like_mask(gray)
+                text_like_score = compute_text_like_score_from_masks(
+                    curr_mask, last_kept_mask
+                )
                 if text_like_score >= subtitle_threshold:
                     should_keep = True
                     reason.append("text_like_change")
 
-            if should_keep:
-                timestamp = round(index / fps, 2)
-                image_path = out_dir / f"kf_{timestamp:07.2f}.png"
-                cv2.imwrite(str(image_path), frame)
-                frame_type = (
-                    "text_like_change" if "text_like_change" in reason else "scene_change"
-                )
-                candidates.append(
-                    {
-                        "time": timestamp,
-                        "frame_index": index,
-                        "image_path": str(image_path),
-                        "global_score": round(global_score, 3),
-                        "text_like_score": round(text_like_score, 3),
-                        "reason": reason,
-                        "type": frame_type,
-                    }
-                )
-                last_keep_frame = index
+        if should_keep:
+            if "global_change" in reason:
+                curr_mask = extract_text_like_mask(gray)
+            timestamp = round(index / fps, 2)
+            image_path = out_dir / f"kf_{timestamp:07.2f}.png"
+            cv2.imwrite(str(image_path), frame)
+            frame_type = (
+                "text_like_change" if "text_like_change" in reason else "scene_change"
+            )
+            candidates.append(
+                {
+                    "time": timestamp,
+                    "frame_index": index,
+                    "image_path": str(image_path),
+                    "global_score": round(global_score, 3),
+                    "text_like_score": round(text_like_score, 3),
+                    "reason": reason,
+                    "type": frame_type,
+                }
+            )
+            last_kept_gray = gray
+            last_kept_mask = curr_mask
+            last_change_keep_frame = index
+            has_change_keep = True
 
-            prev_gray = gray
-            index += 1
-            progress.update(1)
-    finally:
-        progress.close()
+        index += 1
 
     candidates = insert_stable_fill_candidates(candidates, cap, fps, out_dir)
     cap.release()
