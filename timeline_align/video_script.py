@@ -51,9 +51,8 @@ def normalize_video_title(video_stem: str) -> str:
 def build_cover_prompt(reference_text: str) -> str:
     lines = [
         "这是视频封面。",
-        "请根据封面文字提炼视频主题，并生成一段热情、简洁的中文开场白。",
+        "请根据封面文字提炼视频主题，并生成一段简洁的中文开场白。",
         "不要描述背景色、装饰、排版。",
-        "开场白不超过10个字，直接像主持人开场一样说话。",
     ]
     if reference_text:
         lines.append(f"术语约束: {reference_text[:800]}")

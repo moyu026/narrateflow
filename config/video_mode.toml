@@ -1,0 +1,76 @@
+# Video mode config.
+# Fill required paths before running:
+#   python run_pipeline.py
+# Then choose: video
+
+[pipeline]
+# full: run text/script generation, voice, timeline, compose.
+# only: run only target_stage.
+# from: start from target_stage and continue.
+run_mode = 'full'
+
+# Required only when run_mode is 'only' or 'from'.
+# Allowed values: 'text', 'profile', 'voice', 'timeline', 'compose'.
+target_stage = ''
+
+[input]
+# Required. Video mode uses this video, extracts keyframes, and calls call_vl_gemini.
+video = ''
+
+# Optional. Set to a .txt reference document to constrain terminology and topic.
+# Leave empty when there is no reference document.
+reference_document = ''
+
+# Optional. Enable OCR-assisted video script generation when supported.
+enable_ocr = false
+
+[voice]
+# Recommended. Existing .pt profile file or a profile directory containing <dirname>.pt.
+profile = ''
+
+# Optional. Use these three fields instead of profile when you want full mode to create a profile.
+voice_name = ''
+ref_audio = ''
+ref_text = ''
+
+[timeline]
+# Optional. keyframes or times.
+probe_mode = 'keyframes'
+
+# Optional. Comma-separated probe times. Used by timeline alignment.
+probe_times = '0,10,20,30'
+
+# Optional. Leave empty to read GEMINI_API_KEY from environment or .env.
+api_key = ''
+
+[outputs]
+# Optional output locations. Leave empty to use default outputs/ paths.
+stage1_output_dir = ''
+profile_output_dir = ''
+voice_output_dir = ''
+timeline_output = ''
+timeline_debug_dir = ''
+compose_output_dir = ''
+
+[cover]
+# Optional. When enabled, image is required.
+enabled = false
+image = ''
+duration_sec = ''
+paragraph_index = 1
+
+[outro]
+# Optional. When enabled, image is required.
+# Provide audio for fixed outro audio, or text/profile to generate outro audio.
+enabled = false
+image = ''
+audio = ''
+text = ''
+profile = ''
+
+[generation]
+# Optional. Empty means generate all paragraphs.
+paragraphs = ''
+
+# Optional. Empty means no volume gain override.
+volume_gain = ''

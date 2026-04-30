@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,9 @@ STAGE_ALIASES = {
 
 STAGE_SELECTION_CHOICES = ["text", "profile", "voice", "timeline", "compose"]
 RUN_MODE_CHOICES = ["full", "only", "from"]
+PIPELINE_MODE_CHOICES = ["video", "document"]
+DEFAULT_VIDEO_CONFIG = ROOT / "config" / "video_mode.toml"
+DEFAULT_DOCUMENT_CONFIG = ROOT / "config" / "document_mode.toml"
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -169,6 +173,125 @@ def is_text_file_input(path_text: str | None) -> bool:
     return bool(path_text) and Path(str(path_text)).suffix.lower() == ".txt"
 
 
+def empty_to_none(value: Any) -> Any:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def load_toml_config(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file does not exist: {path}")
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def apply_pipeline_mode_config(args: argparse.Namespace) -> str | None:
+    if args.pipeline_mode:
+        mode = args.pipeline_mode
+    elif args.video and not args.ppt:
+        mode = "video"
+    elif args.ppt:
+        mode = "document"
+    else:
+        mode = prompt_choice("Pipeline mode", PIPELINE_MODE_CHOICES, default="video")
+
+    args.config_mode = mode
+    args.skip_initial_input_review = True
+    args.skip_optional_prompts = True
+
+    if mode == "document":
+        args.config_path = args.document_config
+        raise SystemExit(
+            "Document mode config is scaffolded but not implemented yet. Use video mode for now."
+        )
+
+    args.config_path = args.video_config
+    apply_video_mode_config(args, Path(args.video_config))
+    return mode
+
+
+def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None:
+    payload = load_toml_config(config_path)
+    pipeline = payload.get("pipeline", {})
+    input_config = payload.get("input", {})
+    voice = payload.get("voice", {})
+    timeline = payload.get("timeline", {})
+    outputs = payload.get("outputs", {})
+    cover = payload.get("cover", {})
+    outro = payload.get("outro", {})
+    generation = payload.get("generation", {})
+
+    run_mode = pipeline.get("run_mode", "full")
+    target_stage = empty_to_none(pipeline.get("target_stage"))
+    if run_mode not in RUN_MODE_CHOICES:
+        raise ValueError(f"Invalid video config pipeline.run_mode: {run_mode}")
+    if target_stage and target_stage not in STAGE_SELECTION_CHOICES:
+        raise ValueError(f"Invalid video config pipeline.target_stage: {target_stage}")
+    args.only_stage = target_stage if run_mode == "only" else None
+    args.from_stage = target_stage if run_mode == "from" else None
+    args.config_run_mode = run_mode
+    args.config_target_stage = target_stage
+
+    args.video = empty_to_none(input_config.get("video")) or args.video
+    if not args.video:
+        raise ValueError("Video mode requires input.video in config/video_mode.toml")
+    args.reference_text = empty_to_none(input_config.get("reference_document"))
+    args.enable_ocr = bool(input_config.get("enable_ocr", False))
+
+    args.profile = empty_to_none(voice.get("profile")) or args.profile
+    args.voice_name = empty_to_none(voice.get("voice_name")) or args.voice_name
+    args.ref_audio = empty_to_none(voice.get("ref_audio")) or args.ref_audio
+    args.ref_text = empty_to_none(voice.get("ref_text")) or args.ref_text
+    if run_mode == "full" and not args.profile and not (
+        args.voice_name and args.ref_audio and args.ref_text
+    ):
+        raise ValueError(
+            "Video mode full run requires either voice.profile or voice_name/ref_audio/ref_text in config/video_mode.toml"
+        )
+
+    args.probe_mode = timeline.get("probe_mode", args.probe_mode)
+    args.probe_times = (
+        empty_to_none(timeline.get("probe_times")) or args.probe_times or "0,10,20,30"
+    )
+    args.api_key = empty_to_none(timeline.get("api_key")) or args.api_key
+
+    args.stage1_output_dir = empty_to_none(outputs.get("stage1_output_dir"))
+    args.profile_output_dir = empty_to_none(outputs.get("profile_output_dir"))
+    args.voice_output_dir = empty_to_none(outputs.get("voice_output_dir"))
+    args.timeline_output = empty_to_none(outputs.get("timeline_output"))
+    args.timeline_debug_dir = empty_to_none(outputs.get("timeline_debug_dir"))
+    args.compose_output_dir = empty_to_none(outputs.get("compose_output_dir"))
+
+    if bool(cover.get("enabled", False)):
+        args.cover_image = empty_to_none(cover.get("image"))
+        if not args.cover_image:
+            raise ValueError("Video config cover.enabled requires cover.image")
+        args.cover_duration_sec = empty_to_none(cover.get("duration_sec"))
+        args.cover_paragraph_index = int(cover.get("paragraph_index", 1))
+    else:
+        args.cover_image = None
+        args.cover_duration_sec = None
+        args.cover_paragraph_index = 2
+
+    if bool(outro.get("enabled", False)):
+        args.outro_image = empty_to_none(outro.get("image"))
+        args.outro_audio = empty_to_none(outro.get("audio"))
+        args.outro_text = empty_to_none(outro.get("text"))
+        args.outro_profile = empty_to_none(outro.get("profile"))
+        if not args.outro_image:
+            raise ValueError("Video config outro.enabled requires outro.image")
+        if not args.outro_audio and not args.outro_text:
+            raise ValueError("Video config outro.enabled requires outro.audio or outro.text")
+    else:
+        args.outro_image = None
+        args.outro_audio = None
+        args.outro_text = None
+        args.outro_profile = None
+
+    args.paragraphs = empty_to_none(generation.get("paragraphs"))
+    args.volume_gain = empty_to_none(generation.get("volume_gain"))
+
+
 def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config: dict[str, Any] = {}
     run_mode = args.run_mode
@@ -278,7 +401,7 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
         )
         ref_text = ref_text or prompt_text("Reference text")
     elif run_mode == "full":
-        if not profile:
+        if not profile and not (voice_name and ref_audio and ref_text):
             has_profile = prompt_choice(
                 "Do you already have a voice profile file", ["y", "n"], default="y"
             )
@@ -312,7 +435,11 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     )
     cover_duration_sec = args.cover_duration_sec
     cover_paragraph_index = args.cover_paragraph_index
-    if cover_image is None and needs_cover_options(run_mode, target_stage):
+    if (
+        cover_image is None
+        and needs_cover_options(run_mode, target_stage)
+        and not getattr(args, "skip_optional_prompts", False)
+    ):
         use_cover = prompt_choice(
             "Do you want to prepend a cover image before the main video",
             ["y", "n"],
@@ -353,7 +480,12 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
         if args.outro_profile
         else None
     )
-    if outro_image is not None and outro_audio is None and not outro_text:
+    if (
+        outro_image is not None
+        and outro_audio is None
+        and not outro_text
+        and not getattr(args, "skip_optional_prompts", False)
+    ):
         has_fixed_outro_audio = prompt_choice(
             "Do you already have a fixed outro slogan audio",
             ["y", "n"],
@@ -368,7 +500,11 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
                     "Voice profile path for outro generation (.pt file or profile directory)",
                     kinds=("file", "dir"),
                 )
-    if outro_image is None and needs_outro_options(run_mode, target_stage):
+    if (
+        outro_image is None
+        and needs_outro_options(run_mode, target_stage)
+        and not getattr(args, "skip_optional_prompts", False)
+    ):
         use_outro = prompt_choice(
             "Do you want to append an outro page after the main video",
             ["y", "n"],
@@ -414,7 +550,7 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
             "GEMINI_API_KEY" if config.get("input_mode") == "video_context" else "MAAS_API_KEY"
         )
         config["api_key"] = args.api_key or read_env_key(env_key_name)
-        if not config["api_key"]:
+        if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
             config["api_key"] = prompt_text(env_key_name, required=True)
     else:
         config["probe_times"] = args.probe_times
@@ -641,6 +777,9 @@ def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
 def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
     if args.only_stage and args.from_stage:
         raise ValueError("Use either --only-stage or --from-stage, not both.")
+
+    if getattr(args, "config_run_mode", None):
+        return args.config_run_mode, getattr(args, "config_target_stage", None)
 
     if args.only_stage:
         target_stage = STAGE_ALIASES.get(args.only_stage, args.only_stage)
@@ -1095,6 +1234,13 @@ def run_stage4(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactive NarrateFlow pipeline")
+    parser.add_argument(
+        "--pipeline-mode",
+        choices=PIPELINE_MODE_CHOICES,
+        help="Select config-driven pipeline mode.",
+    )
+    parser.add_argument("--video-config", default=str(DEFAULT_VIDEO_CONFIG))
+    parser.add_argument("--document-config", default=str(DEFAULT_DOCUMENT_CONFIG))
     parser.add_argument("--ppt")
     parser.add_argument("--input", dest="ppt")
     parser.add_argument("--page", type=int)
@@ -1143,12 +1289,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    apply_pipeline_mode_config(args)
     run_mode, target_stage = resolve_run_plan(args)
     args.run_mode = run_mode
     args.target_stage = target_stage
     while True:
         config = resolve_initial_args(args)
         sync_config_to_args(args, config)
+        if getattr(args, "skip_initial_input_review", False):
+            break
         input_action = confirm_initial_inputs(config, run_mode, target_stage)
         if input_action == "c":
             break

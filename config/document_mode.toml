@@ -1,0 +1,33 @@
+# Document mode config placeholder.
+# This file is reserved for the document route that will call call_vl_qwen.
+# Strings are written with single quotes to match project convention.
+
+[pipeline]
+run_mode = 'full'
+target_stage = ''
+
+[input]
+# Required when document mode is implemented.
+document = ''
+page = 1
+title_mode = 'first'
+title_indices = '1'
+
+[voice]
+profile = ''
+voice_name = ''
+ref_audio = ''
+ref_text = ''
+
+[timeline]
+probe_mode = 'keyframes'
+probe_times = '0,10,20,30'
+api_key = ''
+
+[outputs]
+stage1_output_dir = ''
+profile_output_dir = ''
+voice_output_dir = ''
+timeline_output = ''
+timeline_debug_dir = ''
+compose_output_dir = ''
