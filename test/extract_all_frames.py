@@ -30,8 +30,8 @@ def extract_all_frames(video_path: Path, output_dir: Path, image_ext: str = "png
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract every frame from a video.")
-    parser.add_argument("--video", required=True, help="Input video path.")
-    parser.add_argument("--output-dir", required=True, help="Directory for frame images.")
+    parser.add_argument("--video", default='', help="Input video path.")
+    parser.add_argument("--output-dir", default='', help="Directory for frame images.")
     parser.add_argument(
         "--image-ext",
         default="png",

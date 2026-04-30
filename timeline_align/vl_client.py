@@ -12,6 +12,7 @@ from typing import Any
 
 import cv2
 import requests
+from tqdm.auto import tqdm
 
 
 QWEN_API_URL = "https://api.modelarts-maas.com/v1/chat/completions"
@@ -278,7 +279,13 @@ def probe_frames(
     frame_hint_builder=None,
 ) -> list[dict]:
     results = []
-    for frame in frames:
+    for frame in tqdm(
+        frames,
+        total=len(frames),
+        desc="Processing keyframes with VLM",
+        unit="frame",
+        leave=False,
+    ):
         hint = (
             frame_hint_builder(frame)
             if frame_hint_builder
@@ -294,4 +301,3 @@ def probe_frames(
         parsed["image_path"] = frame["image_path"]
         results.append(parsed)
     return results
-

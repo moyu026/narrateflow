@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from tqdm.auto import tqdm
+
 from timeline_align.keyframe_filter import sample_keyframes
 from timeline_align.vl_client import (
     call_vl_gemini,
@@ -348,7 +350,14 @@ def generate_window_scripts(
     previous_item: dict[str, Any] | None = None
     resolved_api_key = load_gemini_api_key(gemini_api_key)
 
-    for start in range(0, len(windows), batch_size):
+    batch_starts = range(0, len(windows), batch_size)
+    for start in tqdm(
+        batch_starts,
+        total=math.ceil(len(windows) / batch_size) if windows else 0,
+        desc="Processing keyframes with VLM",
+        unit="batch",
+        leave=False,
+    ):
         batch = windows[start : start + batch_size]
         previous_context, previous_context_type = build_previous_context(previous_item)
         prepared_batch: list[dict[str, Any]] = []
@@ -559,6 +568,7 @@ def run_video_script_generate(
     cover_duration_sec: float | None = None,
     enable_ocr: bool = False,
     batch_size: int = 3,
+    frame_stride: int | None = None,
 ) -> dict[str, Any]:
     debug_dir.mkdir(parents=True, exist_ok=True)
     reference_text = read_reference_text(reference_text_path)
@@ -573,6 +583,7 @@ def run_video_script_generate(
     keyframes_payload = sample_keyframes(
         video_path=video,
         out_dir=debug_dir / "keyframes",
+        frame_stride=frame_stride,
     )
     write_json(debug_dir / "keyframes.json", keyframes_payload)
     windows.extend(build_video_windows(keyframes_payload))

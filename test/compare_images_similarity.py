@@ -51,8 +51,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare two images using keyframe_filter.py similarity scores."
     )
-    parser.add_argument("--first", required=True, help="First image path.")
-    parser.add_argument("--second", required=True, help="Second image path.")
+    parser.add_argument("--first", default='', help="First image path.")
+    parser.add_argument("--second", default='', help="Second image path.")
     parser.add_argument("--global-threshold", type=float, default=12.0)
     parser.add_argument("--subtitle-threshold", type=float, default=8.0)
     args = parser.parse_args()

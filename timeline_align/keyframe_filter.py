@@ -106,6 +106,7 @@ def sample_keyframes(
     video_path: Path,
     out_dir: Path,
     fps_sample: float = 1.0,
+    frame_stride: int | None = None,
     min_gap_sec: float = 2.0,
     global_threshold: float = 12.0,
     subtitle_threshold: float = 8.0,
@@ -117,7 +118,11 @@ def sample_keyframes(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     duration = frame_count / fps if fps else 0.0
-    stride = max(1, int(round(fps / fps_sample)))
+    stride = (
+        max(1, int(frame_stride))
+        if frame_stride is not None
+        else max(1, int(round(fps / fps_sample)))
+    )
     min_gap_frames = int(round(min_gap_sec * fps))
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +215,7 @@ def sample_keyframes(
         "duration": round(duration, 2),
         "fps": fps,
         "fps_sample": fps_sample,
+        "frame_stride": stride,
         "min_gap_sec": min_gap_sec,
         "global_threshold": global_threshold,
         "subtitle_threshold": subtitle_threshold,
@@ -225,6 +231,7 @@ def main() -> None:
     parser.add_argument("--video", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--fps-sample", type=float, default=1.0)
+    parser.add_argument("--frame-stride", type=int)
     parser.add_argument("--min-gap-sec", type=float, default=2.0)
     parser.add_argument("--global-threshold", type=float, default=12.0)
     parser.add_argument("--subtitle-threshold", type=float, default=8.0)
@@ -234,6 +241,7 @@ def main() -> None:
         video_path=Path(args.video),
         out_dir=Path(args.output).parent / "keyframes",
         fps_sample=args.fps_sample,
+        frame_stride=args.frame_stride,
         min_gap_sec=args.min_gap_sec,
         global_threshold=args.global_threshold,
         subtitle_threshold=args.subtitle_threshold,

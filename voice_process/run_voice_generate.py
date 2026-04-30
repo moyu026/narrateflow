@@ -109,7 +109,7 @@ def run_voice_generate(
 
     resolved_voice_name = voice_name or profile_path.stem
     page = int(payload.get("page", 1))
-    ppt_path_text = payload.get("source_path") or payload.get("ppt_path")
+    source_path_text = payload.get("source_path")
     title_text = payload.get("title_text") or f"page_{page:02d}"
     out_dir = build_voice_output_dir(
         profile_name=resolved_voice_name,
@@ -162,7 +162,7 @@ def run_voice_generate(
     ):
         manifest_payload["full_wav_path"] = existing_manifest["full_wav_path"]
     if export_full_page:
-        stem = build_voice_file_stem(ppt_path=ppt_path_text, page=page)
+        stem = build_voice_file_stem(source_path=source_path_text, page=page)
         full_wav_path = out_dir / f"{stem}.wav"
         full_meta_path = out_dir / f"{stem}.json"
         import numpy as np
@@ -185,8 +185,7 @@ def run_voice_generate(
             {
                 "voice_name": resolved_voice_name,
                 "language": language,
-                "source_path": ppt_path_text,
-                "ppt_path": ppt_path_text,
+                "source_path": source_path_text,
                 "page": page,
                 "title_text": title_text,
                 "profile_path": str(profile_path.resolve()),

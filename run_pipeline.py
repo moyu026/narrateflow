@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
-from text_process.run_text_process import prepare_ppt_page, slugify
 from timeline_align.run_timeline_align import run_timeline_align
 from timeline_align.video_script import run_video_script_generate
 from video_compose.run_video_compose import run_video_compose
@@ -16,28 +16,33 @@ from video_compose.run_video_compose import run_video_compose
 ROOT = Path(__file__).resolve().parent
 OUTPUTS_DIR = ROOT / "outputs"
 STAGE_ALIASES = {
-    "1": "text",
+    "1": "script",
     "2": "profile",
     "3": "voice",
     "4": "timeline",
     "5": "compose",
-    "text": "text",
+    "script": "script",
+    "text": "script",
     "profile": "profile",
     "voice": "voice",
     "timeline": "timeline",
     "compose": "compose",
 }
 
-STAGE_SELECTION_CHOICES = ["text", "profile", "voice", "timeline", "compose"]
+STAGE_SELECTION_CHOICES = ["script", "profile", "voice", "timeline", "compose"]
 RUN_MODE_CHOICES = ["full", "only", "from"]
-PIPELINE_MODE_CHOICES = ["video", "document"]
 DEFAULT_VIDEO_CONFIG = ROOT / "config" / "video_mode.toml"
-DEFAULT_DOCUMENT_CONFIG = ROOT / "config" / "document_mode.toml"
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def slugify(value: str, max_len: int = 60) -> str:
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", str(value).strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._")
+    return (cleaned or "untitled")[:max_len]
 
 
 def prompt_text(label: str, default: str | None = None, required: bool = True) -> str:
@@ -79,10 +84,6 @@ def prompt_choice(label: str, choices: list[str], default: str | None = None) ->
         if value in choices:
             return value
         print(f"Please choose one of: {', '.join(choices)}")
-
-
-def parse_title_indices(raw: str) -> set[int]:
-    return {int(item.strip()) for item in raw.split(",") if item.strip()}
 
 
 def resolve_profile_path(raw: str) -> Path:
@@ -131,8 +132,8 @@ def read_env_key(name: str) -> str | None:
     return None
 
 
-def needs_text_inputs(run_mode: str, target_stage: str | None) -> bool:
-    return run_mode == "full" or (run_mode == "only" and target_stage == "text")
+def needs_script_inputs(run_mode: str, target_stage: str | None) -> bool:
+    return run_mode == "full" or (run_mode == "only" and target_stage == "script")
 
 
 def needs_video_input(run_mode: str, target_stage: str | None) -> bool:
@@ -169,10 +170,6 @@ def needs_profile_creation_inputs(
     return False
 
 
-def is_text_file_input(path_text: str | None) -> bool:
-    return bool(path_text) and Path(str(path_text)).suffix.lower() == ".txt"
-
-
 def empty_to_none(value: Any) -> Any:
     if isinstance(value, str) and not value.strip():
         return None
@@ -186,28 +183,12 @@ def load_toml_config(path: Path) -> dict[str, Any]:
 
 
 def apply_pipeline_mode_config(args: argparse.Namespace) -> str | None:
-    if args.pipeline_mode:
-        mode = args.pipeline_mode
-    elif args.video and not args.ppt:
-        mode = "video"
-    elif args.ppt:
-        mode = "document"
-    else:
-        mode = prompt_choice("Pipeline mode", PIPELINE_MODE_CHOICES, default="video")
-
-    args.config_mode = mode
+    args.config_mode = "video"
     args.skip_initial_input_review = True
     args.skip_optional_prompts = True
-
-    if mode == "document":
-        args.config_path = args.document_config
-        raise SystemExit(
-            "Document mode config is scaffolded but not implemented yet. Use video mode for now."
-        )
-
     args.config_path = args.video_config
     apply_video_mode_config(args, Path(args.video_config))
-    return mode
+    return "video"
 
 
 def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None:
@@ -250,6 +231,9 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
         )
 
     args.probe_mode = timeline.get("probe_mode", args.probe_mode)
+    frame_stride = empty_to_none(timeline.get("frame_stride"))
+    if frame_stride is not None:
+        args.frame_stride = int(frame_stride)
     args.probe_times = (
         empty_to_none(timeline.get("probe_times")) or args.probe_times or "0,10,20,30"
     )
@@ -297,51 +281,18 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     run_mode = args.run_mode
     target_stage = args.target_stage
 
-    config["ppt"] = None
     config["page"] = args.page
     config["video"] = None
-    config["title_mode"] = args.title_mode
-    config["title_indices"] = set()
     config["spoken_json"] = None
     config["timeline"] = None
     config["segments_manifest"] = None
     config["outro_profile"] = None
-    config["input_mode"] = "document"
     config["reference_text"] = getattr(args, "reference_text", None)
     config["enable_ocr"] = bool(getattr(args, "enable_ocr", False))
+    config["frame_stride"] = getattr(args, "frame_stride", None)
 
-    if needs_text_inputs(run_mode, target_stage):
-        if args.ppt:
-            config["ppt"] = validate_existing_file(args.ppt, "document path")
-        elif args.video:
-            config["ppt"] = None
-            config["input_mode"] = "video_context"
-        else:
-            config["ppt"] = prompt_existing_path("Document path (.pptx or .txt)")
-
-        if config["input_mode"] == "video_context":
-            config["page"] = 1
-            config["title_mode"] = "none"
-            config["title_indices"] = set()
-        elif is_text_file_input(config["ppt"]):
-            config["page"] = args.page or 1
-        else:
-            config["page"] = args.page or int(prompt_text("Page number"))
-            title_mode = args.title_mode or prompt_choice(
-                "Title mode\n- first: treat the first paragraph as title\n- none: treat all paragraphs as narration\n- manual: choose title paragraph indices manually\nChoice",
-                ["first", "none", "manual"],
-                default="first",
-            )
-            config["title_mode"] = title_mode
-            if title_mode == "manual":
-                raw_indices = args.title_indices or prompt_text(
-                    "Title paragraph indices (comma separated)", default="1"
-                )
-            elif title_mode == "first":
-                raw_indices = "1"
-            else:
-                raw_indices = ""
-            config["title_indices"] = parse_title_indices(raw_indices)
+    if needs_script_inputs(run_mode, target_stage):
+        config["page"] = 1
     elif target_stage in {"profile", "voice", "timeline"} and run_mode == "from":
         config["spoken_json"] = (
             validate_existing_file(args.spoken_json, "spoken json")
@@ -463,7 +414,7 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
         else:
             cover_paragraph_index = None
             cover_duration_sec = None
-    elif cover_image is not None and config.get("input_mode") == "video_context":
+    elif cover_image is not None:
         cover_paragraph_index = 1
     config["cover_image"] = cover_image
     config["cover_duration_sec"] = cover_duration_sec
@@ -546,17 +497,13 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
             "Initial probe times (comma separated, keyframe times)",
             default="0,10,20,30",
         )
-        env_key_name = (
-            "GEMINI_API_KEY" if config.get("input_mode") == "video_context" else "MAAS_API_KEY"
-        )
+        env_key_name = "GEMINI_API_KEY"
         config["api_key"] = args.api_key or read_env_key(env_key_name)
         if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
             config["api_key"] = prompt_text(env_key_name, required=True)
     else:
         config["probe_times"] = args.probe_times
-        env_key_name = (
-            "GEMINI_API_KEY" if config.get("input_mode") == "video_context" else "MAAS_API_KEY"
-        )
+        env_key_name = "GEMINI_API_KEY"
         config["api_key"] = args.api_key or read_env_key(env_key_name)
     return config
 
@@ -568,17 +515,9 @@ def summarize_initial_inputs(
     if target_stage is not None:
         lines.append(f"target_stage: {target_stage}")
 
-    if needs_text_inputs(run_mode, target_stage):
-        lines.append(
-            f"document: {config.get('ppt') or '[video-context scripting]'}"
-        )
+    if needs_script_inputs(run_mode, target_stage):
+        lines.append("script_source: video_context")
         lines.append(f"page: {config.get('page')}")
-        lines.append(f"title_mode: {config.get('title_mode')}")
-        if config.get("title_mode") == "manual":
-            lines.append(
-                "title_indices: "
-                + ",".join(str(item) for item in sorted(config.get("title_indices", [])))
-            )
 
     if config.get("spoken_json"):
         lines.append(f"spoken_json: {config.get('spoken_json')}")
@@ -653,12 +592,8 @@ def confirm_initial_inputs(
 
 
 def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    args.ppt = config.get("ppt")
     args.page = config.get("page")
     args.video = config.get("video")
-    args.title_mode = config.get("title_mode")
-    title_indices = sorted(config.get("title_indices", []))
-    args.title_indices = ",".join(str(item) for item in title_indices) if title_indices else None
     args.spoken_json = config.get("spoken_json")
     args.timeline = config.get("timeline")
     args.segments_manifest = config.get("segments_manifest")
@@ -680,14 +615,15 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.probe_mode = config.get("probe_mode")
     args.probe_times = config.get("probe_times")
     args.api_key = config.get("api_key")
+    args.frame_stride = config.get("frame_stride")
 
 
 def available_edit_sections(
     config: dict[str, Any], run_mode: str, target_stage: str | None
 ) -> list[tuple[str, str]]:
     sections: list[tuple[str, str]] = []
-    if needs_text_inputs(run_mode, target_stage):
-        sections.append(("text", "text inputs"))
+    if needs_script_inputs(run_mode, target_stage):
+        sections.append(("script", "video script inputs"))
     if config.get("spoken_json") or config.get("timeline") or config.get("segments_manifest"):
         sections.append(("paths", "stage paths"))
     if config.get("video"):
@@ -735,13 +671,11 @@ def ask_edit_section(
 
 
 def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
-    if section == "text":
-        args.ppt = None
+    if section == "script":
         args.page = None
-        args.title_mode = None
-        args.title_indices = None
         args.reference_text = None
         args.enable_ocr = False
+        args.frame_stride = None
         return
     if section == "paths":
         args.spoken_json = None
@@ -783,18 +717,18 @@ def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
 
     if args.only_stage:
         target_stage = STAGE_ALIASES.get(args.only_stage, args.only_stage)
-        if target_stage in {"text", "profile", "voice", "timeline", "compose"}:
+        if target_stage in {"script", "profile", "voice", "timeline", "compose"}:
             return "only", target_stage
         raise ValueError(
-            "Unsupported --only-stage value. Use one of: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose"
+            "Unsupported --only-stage value. Use one of: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose"
         )
 
     if args.from_stage:
         target_stage = STAGE_ALIASES.get(args.from_stage, args.from_stage)
-        if target_stage in {"text", "profile", "voice", "timeline", "compose"}:
+        if target_stage in {"script", "profile", "voice", "timeline", "compose"}:
             return "from", target_stage
         raise ValueError(
-            "Unsupported --from-stage value. Use one of: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose"
+            "Unsupported --from-stage value. Use one of: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose"
         )
 
     run_mode = prompt_choice(
@@ -807,7 +741,7 @@ def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
     target_stage = prompt_choice(
         "Choose stage",
         STAGE_SELECTION_CHOICES,
-        default="voice" if run_mode == "from" else "text",
+        default="voice" if run_mode == "from" else "script",
     )
     return run_mode, target_stage
 
@@ -879,9 +813,7 @@ def show_stage1_summary(result: dict[str, Any]) -> None:
     print("Review suggestions:")
     print("- Check page_XX.spoken.json")
     print("- Edit paragraphs[].spoken_text if wording needs adjustment")
-    print(
-        "- If title handling is wrong, rerun Stage 1 with title mode or title indices"
-    )
+    print("- If visual context is wrong, rerun Stage 1 with keyframe settings adjusted")
 
 
 def show_profile_summary(profile_path: Path) -> None:
@@ -1033,32 +965,26 @@ def default_compose_output_dir(source_path: Path, config: dict[str, Any]) -> Pat
 
 
 def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
-    if config.get("input_mode") == "video_context":
-        output_dir = default_stage1_output_dir(config) or (
-            OUTPUTS_DIR / "scripts" / slugify(Path(config["video"]).stem, max_len=60)
-        )
-        debug_dir = (
-            Path(config["timeline_debug_dir"])
-            if config.get("timeline_debug_dir")
-            else OUTPUTS_DIR
-            / "timeline_debug"
-            / slugify(Path(config["video"]).stem, max_len=36)
-        )
-        return run_video_script_generate(
-            video=Path(config["video"]),
-            output_dir=output_dir,
-            debug_dir=debug_dir,
-            gemini_api_key=config.get("api_key"),
-            reference_text_path=Path(config["reference_text"]) if config.get("reference_text") else None,
-            cover_image=Path(config["cover_image"]) if config.get("cover_image") else None,
-            cover_duration_sec=config.get("cover_duration_sec"),
-            enable_ocr=bool(config.get("enable_ocr", False)),
-        )
-    return prepare_ppt_page(
-        ppt_path=Path(config["ppt"]),
-        page=int(config["page"]),
-        title_indices=config["title_indices"],
-        output_dir=default_stage1_output_dir(config),
+    output_dir = default_stage1_output_dir(config) or (
+        OUTPUTS_DIR / "scripts" / slugify(Path(config["video"]).stem, max_len=60)
+    )
+    debug_dir = (
+        Path(config["timeline_debug_dir"])
+        if config.get("timeline_debug_dir")
+        else OUTPUTS_DIR
+        / "timeline_debug"
+        / slugify(Path(config["video"]).stem, max_len=36)
+    )
+    return run_video_script_generate(
+        video=Path(config["video"]),
+        output_dir=output_dir,
+        debug_dir=debug_dir,
+        gemini_api_key=config.get("api_key"),
+        reference_text_path=Path(config["reference_text"]) if config.get("reference_text") else None,
+        cover_image=Path(config["cover_image"]) if config.get("cover_image") else None,
+        cover_duration_sec=config.get("cover_duration_sec"),
+        enable_ocr=bool(config.get("enable_ocr", False)),
+        frame_stride=config.get("frame_stride"),
     )
 
 
@@ -1234,15 +1160,7 @@ def run_stage4(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactive NarrateFlow pipeline")
-    parser.add_argument(
-        "--pipeline-mode",
-        choices=PIPELINE_MODE_CHOICES,
-        help="Select config-driven pipeline mode.",
-    )
     parser.add_argument("--video-config", default=str(DEFAULT_VIDEO_CONFIG))
-    parser.add_argument("--document-config", default=str(DEFAULT_DOCUMENT_CONFIG))
-    parser.add_argument("--ppt")
-    parser.add_argument("--input", dest="ppt")
     parser.add_argument("--page", type=int)
     parser.add_argument("--video")
     parser.add_argument("--profile")
@@ -1250,8 +1168,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ref-audio")
     parser.add_argument("--ref-text")
     parser.add_argument("--reference-text")
-    parser.add_argument("--title-mode", choices=["first", "none", "manual"])
-    parser.add_argument("--title-indices")
     parser.add_argument("--stage1-output-dir")
     parser.add_argument("--profile-output-dir")
     parser.add_argument("--voice-output-dir")
@@ -1273,16 +1189,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--probe-mode", choices=["keyframes", "times"], default="keyframes"
     )
+    parser.add_argument("--frame-stride", type=int)
     parser.add_argument("--probe-times")
     parser.add_argument("--api-key")
     parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(
         "--only-stage",
-        help="Run only one stage. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
+        help="Run only one stage. Supported values: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose",
     )
     parser.add_argument(
         "--from-stage",
-        help="Start from one stage and continue. Supported values: 1/text, 2/profile, 3/voice, 4/timeline, 5/compose",
+        help="Start from one stage and continue. Supported values: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose",
     )
     return parser
 
@@ -1309,8 +1226,8 @@ def main() -> None:
     total = 5
 
     if run_mode == "only":
-        if target_stage == "text":
-            stage_banner(1, total, "Text Processing")
+        if target_stage == "script":
+            stage_banner(1, total, "Video Script Generation")
             stage1_result = run_stage1(config)
             show_stage1_summary(stage1_result)
             return
@@ -1369,7 +1286,7 @@ def main() -> None:
 
     if run_mode == "full":
         while True:
-            stage_banner(1, total, "Text Processing")
+            stage_banner(1, total, "Video Script Generation")
             stage1_result = run_stage1(config)
             show_stage1_summary(stage1_result)
             action = ask_continue_or_stop("Stage 1")

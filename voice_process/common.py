@@ -225,10 +225,10 @@ def build_voice_output_dir(
     return out_dir
 
 
-def build_voice_file_stem(ppt_path: str | None, page: int) -> str:
-    ppt_stem = Path(ppt_path).stem if ppt_path else f"page_{page:02d}"
+def build_voice_file_stem(source_path: str | None, page: int) -> str:
+    source_stem = Path(source_path).stem if source_path else f"page_{page:02d}"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{ts}__{slugify(f'{ppt_stem}_page_{page:02d}', max_len=36)}"
+    return f"{ts}__{slugify(f'{source_stem}_page_{page:02d}', max_len=36)}"
 
 
 def synthesize_segment_wavs(
