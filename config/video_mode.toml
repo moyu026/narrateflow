@@ -34,9 +34,6 @@ ref_audio = ''
 ref_text = ''
 
 [timeline]
-# Optional. keyframes or times.
-probe_mode = 'keyframes'
-
 # Optional. Inspect one frame every N video frames when extracting keyframes.
 # Example: 30 checks frames 0,30,60...; 1 checks every frame.
 frame_stride = 30

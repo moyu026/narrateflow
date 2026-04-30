@@ -230,7 +230,6 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
             "Video mode full run requires either voice.profile or voice_name/ref_audio/ref_text in config/video_mode.toml"
         )
 
-    args.probe_mode = timeline.get("probe_mode", args.probe_mode)
     frame_stride = empty_to_none(timeline.get("frame_stride"))
     if frame_stride is not None:
         args.frame_stride = int(frame_stride)
@@ -484,7 +483,6 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["outro_profile"] = outro_profile
     config["paragraphs"] = args.paragraphs
     config["volume_gain"] = args.volume_gain
-    config["probe_mode"] = args.probe_mode
     env_key_name = "GEMINI_API_KEY"
     config["api_key"] = args.api_key or read_env_key(env_key_name)
     if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
@@ -594,7 +592,6 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.outro_profile = config.get("outro_profile")
     args.paragraphs = config.get("paragraphs")
     args.volume_gain = config.get("volume_gain")
-    args.probe_mode = config.get("probe_mode")
     args.api_key = config.get("api_key")
     args.frame_stride = config.get("frame_stride")
 
@@ -1052,7 +1049,6 @@ def run_stage3(config: dict[str, Any], spoken_json: Path) -> Path:
         output=output,
         debug_dir=default_timeline_debug_dir(config, spoken_json),
         api_key=config["api_key"],
-        probe_mode=config["probe_mode"],
         cover_paragraph_index=(
             int(config.get("cover_paragraph_index") or 2)
             if config.get("cover_image")
@@ -1165,9 +1161,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--outro-profile")
     parser.add_argument("--paragraphs")
     parser.add_argument("--volume-gain", type=float)
-    parser.add_argument(
-        "--probe-mode", choices=["keyframes", "times"], default="keyframes"
-    )
     parser.add_argument("--frame-stride", type=int)
     parser.add_argument("--api-key")
     parser.add_argument("--enable-ocr", action="store_true")
