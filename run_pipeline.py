@@ -234,9 +234,6 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
     frame_stride = empty_to_none(timeline.get("frame_stride"))
     if frame_stride is not None:
         args.frame_stride = int(frame_stride)
-    args.probe_times = (
-        empty_to_none(timeline.get("probe_times")) or args.probe_times or "0,10,20,30"
-    )
     args.api_key = empty_to_none(timeline.get("api_key")) or args.api_key
 
     args.stage1_output_dir = empty_to_none(outputs.get("stage1_output_dir"))
@@ -488,23 +485,10 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["paragraphs"] = args.paragraphs
     config["volume_gain"] = args.volume_gain
     config["probe_mode"] = args.probe_mode
-    if (
-        run_mode == "full"
-        or target_stage in {"timeline"}
-        or (run_mode == "from" and target_stage in {"profile", "voice"})
-    ):
-        config["probe_times"] = args.probe_times or prompt_text(
-            "Initial probe times (comma separated, keyframe times)",
-            default="0,10,20,30",
-        )
-        env_key_name = "GEMINI_API_KEY"
-        config["api_key"] = args.api_key or read_env_key(env_key_name)
-        if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
-            config["api_key"] = prompt_text(env_key_name, required=True)
-    else:
-        config["probe_times"] = args.probe_times
-        env_key_name = "GEMINI_API_KEY"
-        config["api_key"] = args.api_key or read_env_key(env_key_name)
+    env_key_name = "GEMINI_API_KEY"
+    config["api_key"] = args.api_key or read_env_key(env_key_name)
+    if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
+        config["api_key"] = prompt_text(env_key_name, required=True)
     return config
 
 
@@ -568,8 +552,6 @@ def summarize_initial_inputs(
     if config.get("volume_gain") is not None:
         lines.append(f"volume_gain: {config.get('volume_gain')}")
 
-    if config.get("probe_times"):
-        lines.append(f"probe_times: {config.get('probe_times')}")
     lines.append(
         "api_key: "
         + ("set" if config.get("api_key") else "not set")
@@ -613,7 +595,6 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.paragraphs = config.get("paragraphs")
     args.volume_gain = config.get("volume_gain")
     args.probe_mode = config.get("probe_mode")
-    args.probe_times = config.get("probe_times")
     args.api_key = config.get("api_key")
     args.frame_stride = config.get("frame_stride")
 
@@ -641,7 +622,7 @@ def available_edit_sections(
         sections.append(("cover", "cover intro"))
     if needs_outro_options(run_mode, target_stage):
         sections.append(("outro", "outro page"))
-    if config.get("probe_times") or run_mode == "full" or target_stage in {"timeline"}:
+    if run_mode == "full" or target_stage in {"timeline"}:
         sections.append(("probe", "timeline probe"))
     seen: set[str] = set()
     unique_sections: list[tuple[str, str]] = []
@@ -703,7 +684,6 @@ def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
         args.outro_profile = None
         return
     if section == "probe":
-        args.probe_times = None
         args.api_key = None
         return
 
@@ -1073,7 +1053,6 @@ def run_stage3(config: dict[str, Any], spoken_json: Path) -> Path:
         debug_dir=default_timeline_debug_dir(config, spoken_json),
         api_key=config["api_key"],
         probe_mode=config["probe_mode"],
-        probe_times=config["probe_times"],
         cover_paragraph_index=(
             int(config.get("cover_paragraph_index") or 2)
             if config.get("cover_image")
@@ -1190,7 +1169,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--probe-mode", choices=["keyframes", "times"], default="keyframes"
     )
     parser.add_argument("--frame-stride", type=int)
-    parser.add_argument("--probe-times")
     parser.add_argument("--api-key")
     parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(

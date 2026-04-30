@@ -11,4 +11,4 @@ tqdm
 opencv-python
 numpy
 gradio
-google-generativeai
+google-genai

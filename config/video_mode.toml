@@ -10,23 +10,23 @@
 run_mode = 'full'
 
 # Required only when run_mode is 'only' or 'from'.
-# Allowed values: 'text', 'profile', 'voice', 'timeline', 'compose'.
+# Allowed values: 'script', 'profile', 'voice', 'timeline', 'compose'.
 target_stage = ''
 
 [input]
 # Required. Video mode uses this video, extracts keyframes, and calls call_vl_gemini.
-video = '/content/video/2.mp4'
+video = ''
 
 # Optional. Set to a .txt reference document to constrain terminology and topic.
 # Leave empty when there is no reference document.
-reference_document = '/content/video/2.txt'
+reference_document = ''
 
 # Optional. Enable OCR-assisted video script generation when supported.
 enable_ocr = false
 
 [voice]
 # Recommended. Existing .pt profile file or a profile directory containing <dirname>.pt.
-profile = '/content/video/selina.pt'
+profile = ''
 
 # Optional. Use these three fields instead of profile when you want full mode to create a profile.
 voice_name = ''
@@ -40,9 +40,6 @@ probe_mode = 'keyframes'
 # Optional. Inspect one frame every N video frames when extracting keyframes.
 # Example: 30 checks frames 0,30,60...; 1 checks every frame.
 frame_stride = 30
-
-# Optional. Comma-separated probe times. Used by timeline alignment.
-probe_times = '0,10,20,30'
 
 # Optional. Leave empty to read GEMINI_API_KEY from environment or .env.
 api_key = ''

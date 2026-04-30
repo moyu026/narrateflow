@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import io
 import json
 import os
 import re
@@ -158,11 +157,10 @@ def call_vl_gemini(
     prompt: str,
     model: str = "gemini-2.5-pro",
 ) -> dict:
-    import google.generativeai as genai
-    from PIL import Image
+    from google import genai
+    from google.genai import types
 
-    genai.configure(api_key=api_key)
-    client = genai.GenerativeModel(model)
+    client = genai.Client(api_key=api_key)
 
     contents: list[Any] = [prompt]
     for window in windows:
@@ -173,9 +171,9 @@ def call_vl_gemini(
             frame_label = f"#{index}"
             time_text = f"@ {float(frame['time']):.2f}s"
             image_bytes = _annotate_frame_bytes(Path(frame["image_path"]), frame_label, time_text)
-            contents.append(Image.open(io.BytesIO(image_bytes)))
+            contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/png"))
 
-    response = client.generate_content(contents)
+    response = client.models.generate_content(model=model, contents=contents)
     return {"content": getattr(response, "text", "")}
 
 
