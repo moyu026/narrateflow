@@ -1,30 +1,14 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
 import cv2
-import requests
 from tqdm.auto import tqdm
-
-
-QWEN_API_URL = "https://api.modelarts-maas.com/v1/chat/completions"
-REQUEST_INTERVAL_SEC = 1.0
-MAX_RETRIES = 2
-RETRY_BACKOFF_SEC = 3.0
-
-
-def load_api_key(explicit_key: str | None = None) -> str:
-    api_key = explicit_key or os.environ.get("MAAS_API_KEY")
-    if not api_key:
-        raise SystemExit("Environment variable MAAS_API_KEY is required.")
-    return api_key
 
 
 def load_gemini_api_key(explicit_key: str | None = None) -> str:
@@ -71,61 +55,6 @@ def build_prompt(
     return "\n".join(lines)
 
 
-def _encode_image_as_data_url(image_path: Path) -> str:
-    image_mime = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
-    base64_image = base64.b64encode(image_path.read_bytes()).decode("utf-8")
-    return f"data:{image_mime};base64,{base64_image}"
-
-
-def call_vl_qwen(api_key: str, image_path: Path, prompt: str) -> dict:
-    payload = {
-        "model": "qwen2.5-vl-72b",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": _encode_image_as_data_url(image_path)},
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.1,
-    }
-    session = requests.Session()
-    session.trust_env = False
-    last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            response = session.post(
-                QWEN_API_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                timeout=180,
-                verify=False,
-            )
-            response.raise_for_status()
-            if REQUEST_INTERVAL_SEC > 0:
-                time.sleep(REQUEST_INTERVAL_SEC)
-            return response.json()
-        except (
-            requests.exceptions.ReadTimeout,
-            requests.exceptions.ConnectionError,
-        ) as exc:
-            last_error = exc
-            if attempt >= MAX_RETRIES:
-                raise
-            time.sleep(RETRY_BACKOFF_SEC * (attempt + 1))
-    if last_error:
-        raise last_error
-    raise RuntimeError("Qwen VL request failed unexpectedly.")
-
-
 def _annotate_frame_bytes(
     image_path: Path, label: str, time_text: str | None = None
 ) -> bytes:
@@ -170,8 +99,12 @@ def call_vl_gemini(
         for index, frame in enumerate(window.get("frames", []), start=1):
             frame_label = f"#{index}"
             time_text = f"@ {float(frame['time']):.2f}s"
-            image_bytes = _annotate_frame_bytes(Path(frame["image_path"]), frame_label, time_text)
-            contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/png"))
+            image_bytes = _annotate_frame_bytes(
+                Path(frame["image_path"]), frame_label, time_text
+            )
+            contents.append(
+                types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+            )
 
     response = client.models.generate_content(model=model, contents=contents)
     return {"content": getattr(response, "text", "")}
@@ -290,10 +223,19 @@ def probe_frames(
             else f"当前视频时间点约为 {frame['time']} 秒。请注意允许返回 unknown。"
         )
         prompt = build_prompt(title=title, segments=segments, frame_hint=hint)
-        response = call_vl_qwen(
-            api_key=api_key, image_path=Path(frame["image_path"]), prompt=prompt
+        response = call_vl_gemini(
+            api_key=api_key,
+            windows=[
+                {
+                    "window_id": 1,
+                    "start_time": float(frame["time"]),
+                    "end_time": float(frame["time"]),
+                    "frames": [frame],
+                }
+            ],
+            prompt=prompt,
         )
-        content = response["choices"][0]["message"]["content"]
+        content = response["content"]
         parsed = safe_parse_json_from_content(content)
         parsed["time"] = frame["time"]
         parsed["image_path"] = frame["image_path"]

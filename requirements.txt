@@ -6,7 +6,6 @@ torchaudio
 torchvision
 soundfile
 librosa
-requests
 tqdm
 opencv-python
 numpy

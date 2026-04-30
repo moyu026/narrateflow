@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 from timeline_align.keyframe_filter import sample_keyframes
 from timeline_align.vl_client import (
     extract_frames_at_times,
-    load_api_key,
+    load_gemini_api_key,
     load_page_segments,
     load_selected_keyframes,
     probe_frames,
@@ -123,7 +123,7 @@ def build_probe_payload(
     frame_hint: str | None = None,
     body_start_paragraph_index: int = 2,
 ) -> dict[str, Any]:
-    resolved_api_key = load_api_key(api_key)
+    resolved_api_key = load_gemini_api_key(api_key)
     title, segments = load_page_segments(spoken_json)
     segments = [
         s for s in segments if int(s.get("paragraph_index", 0)) >= body_start_paragraph_index

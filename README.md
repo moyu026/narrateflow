@@ -12,8 +12,8 @@ It extracts narration text, generates paragraph-level voice audio, aligns audio 
 | FFmpeg / FFprobe | Required | Used for frame extraction and video composition |
 | CUDA | Recommended | Speeds up local TTS inference |
 | Local TTS backend | Qwen-TTS | Used in `voice_process` |
-| VL backend | Qwen2.5-VL-72B via MAAS API | Used in `timeline_align` |
-| API key | `MAAS_API_KEY` | Required for timeline alignment |
+| VL backend | Gemini via Google GenAI API | Used in `timeline_align` |
+| API key | `GEMINI_API_KEY` | Required for timeline alignment |
 
 ## Installation
 
