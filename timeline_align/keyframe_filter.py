@@ -52,6 +52,12 @@ def compute_text_like_score_from_masks(
     return float(np.mean(diff))
 
 
+def write_frame_image(image_path: Path, frame: np.ndarray) -> None:
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(image_path), frame):
+        raise RuntimeError(f"无法写入关键帧图片: {image_path}")
+
+
 def insert_stable_fill_candidates(
     candidates: list[dict],
     cap: cv2.VideoCapture,
@@ -81,7 +87,7 @@ def insert_stable_fill_candidates(
             if not ok:
                 continue
             image_path = out_dir / f"kf_{t:07.2f}.png"
-            cv2.imwrite(str(image_path), frame)
+            write_frame_image(image_path, frame)
             enriched.append(
                 {
                     "time": t,
@@ -135,7 +141,7 @@ def sample_keyframes(
         if last_kept_gray is None:
             timestamp = round(index / fps, 2)
             image_path = out_dir / f"kf_{timestamp:07.2f}.png"
-            cv2.imwrite(str(image_path), frame)
+            write_frame_image(image_path, frame)
             candidates.append(
                 {
                     "time": timestamp,
@@ -175,7 +181,7 @@ def sample_keyframes(
                 curr_mask = extract_text_like_mask(gray)
             timestamp = round(index / fps, 2)
             image_path = out_dir / f"kf_{timestamp:07.2f}.png"
-            cv2.imwrite(str(image_path), frame)
+            write_frame_image(image_path, frame)
             frame_type = (
                 "text_like_change" if "text_like_change" in reason else "scene_change"
             )
