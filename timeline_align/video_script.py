@@ -6,8 +6,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from tqdm.auto import tqdm
-
 from timeline_align.keyframe_filter import sample_keyframes
 from timeline_align.vl_client import (
     call_vl_gemini,
@@ -351,13 +349,7 @@ def generate_window_scripts(
     resolved_api_key = load_gemini_api_key(gemini_api_key)
 
     batch_starts = range(0, len(windows), batch_size)
-    for start in tqdm(
-        batch_starts,
-        total=math.ceil(len(windows) / batch_size) if windows else 0,
-        desc="Processing keyframes with VLM",
-        unit="batch",
-        leave=False,
-    ):
+    for start in batch_starts:
         batch = windows[start : start + batch_size]
         previous_context, previous_context_type = build_previous_context(previous_item)
         prepared_batch: list[dict[str, Any]] = []

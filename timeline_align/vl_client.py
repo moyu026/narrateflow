@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import cv2
-from tqdm.auto import tqdm
-
 
 def load_gemini_api_key(explicit_key: str | None = None) -> str:
     api_key = explicit_key or os.environ.get("GEMINI_API_KEY")
@@ -210,13 +208,7 @@ def probe_frames(
     frame_hint_builder=None,
 ) -> list[dict]:
     results = []
-    for frame in tqdm(
-        frames,
-        total=len(frames),
-        desc="Processing keyframes with VLM",
-        unit="frame",
-        leave=False,
-    ):
+    for frame in frames:
         hint = (
             frame_hint_builder(frame)
             if frame_hint_builder
