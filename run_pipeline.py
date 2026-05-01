@@ -191,6 +191,23 @@ def apply_pipeline_mode_config(args: argparse.Namespace) -> str | None:
     return "video"
 
 
+def reload_runtime_config(
+    args: argparse.Namespace, current_config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    if current_config is not None:
+        sync_config_to_args(args, current_config)
+    run_mode = getattr(args, "run_mode", None)
+    target_stage = getattr(args, "target_stage", None)
+    if getattr(args, "config_mode", None) == "video":
+        config_path = Path(getattr(args, "config_path", None) or args.video_config)
+        apply_video_mode_config(args, config_path)
+        args.run_mode = run_mode
+        args.target_stage = target_stage
+    config = resolve_initial_args(args)
+    sync_config_to_args(args, config)
+    return config
+
+
 def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None:
     payload = load_toml_config(config_path)
     pipeline = payload.get("pipeline", {})
@@ -1217,9 +1234,9 @@ def main() -> None:
     run_mode, target_stage = resolve_run_plan(args)
     args.run_mode = run_mode
     args.target_stage = target_stage
+    config: dict[str, Any] | None = None
     while True:
-        config = resolve_initial_args(args)
-        sync_config_to_args(args, config)
+        config = reload_runtime_config(args, config)
         if getattr(args, "skip_initial_input_review", False):
             break
         input_action = confirm_initial_inputs(config, run_mode, target_stage)
@@ -1234,11 +1251,13 @@ def main() -> None:
 
     if run_mode == "only":
         if target_stage == "script":
+            config = reload_runtime_config(args, config)
             stage_banner(1, total, "Video Script Generation")
             stage1_result = run_stage1(config)
             show_stage1_summary(stage1_result)
             return
         if target_stage == "profile":
+            config = reload_runtime_config(args, config)
             stage_banner(2, total, "Voice Profile Generation")
             profile_path = run_stage2_profile(config)
             config["profile"] = str(profile_path)
@@ -1246,6 +1265,7 @@ def main() -> None:
             return
         if target_stage == "voice":
             stage_banner(3, total, "Voice Generation")
+            config = reload_runtime_config(args, config)
             paragraph_indices, volume_gain = ask_voice_generation_scope(config)
             manifest_path = run_stage2_voice(
                 config,
@@ -1265,6 +1285,7 @@ def main() -> None:
                     return
                 target = ask_regenerate_target()
                 volume_gain = ask_regenerate_volume_gain()
+                config = reload_runtime_config(args, config)
                 manifest_path = rerun_stage2_for_target(
                     config,
                     ensure_spoken_json_path(config),
@@ -1273,11 +1294,13 @@ def main() -> None:
                     volume_gain=volume_gain,
                 )
         if target_stage == "timeline":
+            config = reload_runtime_config(args, config)
             stage_banner(4, total, "Timeline Alignment")
             timeline_path = run_stage3(config, ensure_spoken_json_path(config))
             show_stage3_summary(timeline_path)
             return
         if target_stage == "compose":
+            config = reload_runtime_config(args, config)
             stage_banner(5, total, "Video Composition")
             composed_path = run_stage4(
                 config,
@@ -1293,6 +1316,7 @@ def main() -> None:
 
     if run_mode == "full":
         while True:
+            config = reload_runtime_config(args, config)
             stage_banner(1, total, "Video Script Generation")
             stage1_result = run_stage1(config)
             show_stage1_summary(stage1_result)
@@ -1303,6 +1327,7 @@ def main() -> None:
                 break
 
         while True:
+            config = reload_runtime_config(args, config)
             profile_path = Path(config["profile"]) if config.get("profile") else None
             if profile_path is None:
                 stage_banner(2, total, "Voice Profile Generation")
@@ -1339,6 +1364,7 @@ def main() -> None:
                     break
                 target = ask_regenerate_target()
                 volume_gain = ask_regenerate_volume_gain()
+                config = reload_runtime_config(args, config)
                 manifest_path = rerun_stage2_for_target(
                     config,
                     ensure_spoken_json_path(config, stage1_result),
@@ -1355,6 +1381,7 @@ def main() -> None:
 
     if run_mode == "from" and target_stage in {"profile", "voice"}:
         while True:
+            config = reload_runtime_config(args, config)
             profile_path = Path(config["profile"]) if config.get("profile") else None
             if profile_path is None:
                 stage_banner(2, total, "Voice Profile Generation")
@@ -1388,6 +1415,7 @@ def main() -> None:
                     break
                 target = ask_regenerate_target()
                 volume_gain = ask_regenerate_volume_gain()
+                config = reload_runtime_config(args, config)
                 manifest_path = rerun_stage2_for_target(
                     config,
                     ensure_spoken_json_path(config, stage1_result),
@@ -1403,6 +1431,7 @@ def main() -> None:
         run_mode == "from" and target_stage in {"profile", "voice", "timeline"}
     ):
         while True:
+            config = reload_runtime_config(args, config)
             stage_banner(4, total, "Timeline Alignment")
             timeline_path = run_stage3(
                 config, ensure_spoken_json_path(config, stage1_result)
@@ -1415,6 +1444,7 @@ def main() -> None:
             if action == "s":
                 return
             if action == "b":
+                config = reload_runtime_config(args, config)
                 profile_path = (
                     Path(config["profile"]) if config.get("profile") else None
                 )
@@ -1441,6 +1471,7 @@ def main() -> None:
                         break
                     target = ask_regenerate_target()
                     volume_gain = ask_regenerate_volume_gain()
+                    config = reload_runtime_config(args, config)
                     manifest_path = rerun_stage2_for_target(
                         config,
                         ensure_spoken_json_path(config, stage1_result),
@@ -1466,6 +1497,7 @@ def main() -> None:
         raise ValueError("Timeline path is required before video composition.")
 
     stage_banner(5, total, "Video Composition")
+    config = reload_runtime_config(args, config)
     composed_path = run_stage4(config, timeline_path, manifest_path)
     show_stage4_summary(composed_path, composed_path.parent)
 
