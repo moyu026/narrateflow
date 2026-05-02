@@ -36,11 +36,11 @@ ref_text = ''
 [timeline]
 # Optional. Inspect one frame every N video frames when extracting keyframes.
 # Example: 30 checks frames 0,30,60...; 1 checks every frame.
-frame_stride = 30
+frame_stride = 3
 
 # Optional. Minimum seconds between saved change keyframes.
 # Higher values reduce noisy repeated keyframes; lower values capture rapid UI changes.
-min_gap_sec = 2.0
+min_gap_sec = 0.5
 
 # Optional. Global image-change threshold.
 # A sampled frame is kept as a scene change when its average grayscale difference
