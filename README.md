@@ -1,8 +1,8 @@
 # NarrateFlow
 
-NarrateFlow is a human-in-the-loop pipeline for turning PPTs or documents into dubbed videos.
+NarrateFlow is a human-in-the-loop pipeline for turning a source video into a narrated, dubbed video.
 
-It extracts narration text, generates paragraph-level voice audio, aligns audio to a target video timeline with a vision-language model, and renders the final dubbed video.
+It samples keyframes from the video, asks a vision-language model to draft concise narration windows, generates paragraph-level voice audio, aligns the narration to the video timeline, and renders the final composed video.
 
 ## Environment
 
@@ -30,28 +30,57 @@ Notes:
 - `ffmpeg` / `ffprobe` must be installed separately and available in `PATH`.
 - `sox` is optional but recommended. If unavailable, speed adjustment falls back to `librosa`.
 
+
 ## Recommended Usage
 
-The recommended way to run NarrateFlow is through the interactive pipeline entrypoint:
+The recommended way to run NarrateFlow is through the pipeline entrypoint:
 
 ```bash
 python run_pipeline.py
 ```
 
-The pipeline now supports three execution modes:
+The default configuration file is `config/video_mode.toml`. Fill in the video path, Gemini key or `GEMINI_API_KEY`, and voice profile settings before running.
+
+The pipeline supports three execution modes:
 
 1. `full`: run the complete pipeline from Stage 1 to Stage 5
 2. `only`: run only one stage
 3. `from`: start from a stage and continue forward
 
-The CLI asks only for the inputs needed by the selected mode and stage.
+Stage names:
 
-Stage 1 now supports both `.pptx` and `.txt` inputs. For plain text input:
+1. `script`: video keyframe sampling and narration drafting
+2. `profile`: voice profile generation
+3. `voice`: voice generation
+4. `timeline`: timeline JSON generation
+5. `compose`: final video composition
 
-- use a `.txt` file as the document source
-- the pipeline treats it as a single-page script source
-- if the file contains blank lines, blank lines are used as paragraph boundaries
-- otherwise, each non-empty line is treated as one paragraph
+Default outputs are grouped by video:
+
+```text
+outputs/
+└── <video_stem>/
+    ├── scripts/
+    │   ├── page_01.spoken.json
+    │   └── page_01.extracted.json
+    ├── timeline_debug/
+    │   ├── keyframes/
+    │   ├── keyframes.json
+    │   ├── window_manifest.json
+    │   ├── window_script_drafts.json
+    │   ├── gemini_batch_requests.json
+    │   └── gemini_batch_responses.json
+    ├── timeline/
+    │   ├── page_01.timeline.final.json
+    │   └── debug/
+    ├── voice/
+    │   ├── segments_manifest.json
+    │   └── segments/
+    └── composed/
+        ├── page_audio.wav
+        ├── page_composed.mp4
+        └── page_plan.json
+```
 
 If a cover image should be shown before the main video starts, the interactive runner can now ask for:
 
@@ -69,7 +98,7 @@ The interactive runner can also ask for an outro page:
 
 ## Example Interactive Flow
 
-Below is a simplified example of what an interactive run looks like.
+Below is a simplified example of a full video-mode run.
 
 ### Input Collection
 
@@ -80,24 +109,14 @@ Run mode
 - from: start from one stage and continue
 Choice (full/only/from) [full]: full
 
-PPT path: <path/to/example.pptx>
-Page number: 5
 Target video path: <path/to/example.mp4>
-
-Title mode
-- first: treat the first paragraph as title
-- none: treat all paragraphs as narration
-- manual: choose title paragraph indices manually
-Choice (first/none/manual) [first]: first
 
 Do you already have a voice profile file (y/n) [y]: y
 Voice profile path (.pt file or profile directory): outputs/voice_profiles/reference_voice
 
-Initial probe times (comma separated, keyframe times) [0,10,20,30]: 0,10,20,30
-
 Do you want to prepend a cover image before the main video (y/n) [n]: y
 Cover image path: <path/to/cover.png>
-Cover paragraph index [2]: 2
+Cover paragraph index [1]: 1
 Optional cover duration in seconds (empty means use cover paragraph audio duration):
 
 Do you want to append an outro page after the main video (y/n) [n]: y
@@ -106,30 +125,30 @@ Do you already have a fixed outro slogan audio (y/n) [y]: n
 Outro slogan text: <your fixed slogan text>
 ```
 
-For a plain text script, you can also start directly with:
+You can also run a single stage from the config:
 
 ```bash
-python run_pipeline.py --only-stage text --input "<path/to/script.txt>"
+python run_pipeline.py --only-stage script
 ```
 
-### Stage 1. Text Processing
+### Stage 1. Video Script Generation
 
 **Output and Review**
 
 Check:
-- paragraph extraction
-- title handling
+- sampled keyframes
+- generated narration windows
 - spoken narration wording
-- whether header/footer-like short text has been filtered as expected
+- whether large on-screen annotation text was interpreted correctly
 
 Edit if needed:
-- `page_XX.spoken.json -> paragraphs[].spoken_text`
+- `page_01.spoken.json -> paragraphs[].spoken_text`
 
 ```text
-[1/5] Text Processing
+[1/5] Video Script Generation
 Stage 1 completed.
-extracted_json: outputs/scripts/<page_name>/page_05.extracted.json
-spoken_json:    outputs/scripts/<page_name>/page_05.spoken.json
+extracted_json: outputs/<video_stem>/scripts/page_01.extracted.json
+spoken_json:    outputs/<video_stem>/scripts/page_01.spoken.json
 
 Stage 1 review action
 - c: continue to the next stage
@@ -178,8 +197,8 @@ Paragraph indices to generate (comma separated, empty means all): 4,7
 Optional volume gain for this regeneration (e.g. 0.9, 1.1, default empty): 1.1
 
 Stage 3 completed.
-manifest: outputs/<voice_name>/<page_name>/segments_manifest.json
-segments_dir: outputs/<voice_name>/<page_name>/segments
+manifest: outputs/<video_stem>/voice/segments_manifest.json
+segments_dir: outputs/<video_stem>/voice/segments
 Available paragraphs:
 2, 3, 4, 5, 6, 7
 
@@ -210,7 +229,7 @@ Edit if needed:
 ```text
 [4/5] Timeline Alignment
 Stage 4 completed.
-timeline: outputs/scripts/<page_name>/page_05.timeline.final.json
+timeline: outputs/<video_stem>/timeline/page_01.timeline.final.json
 status: complete
 missing: []
 
@@ -246,16 +265,19 @@ If something is wrong:
 ```text
 [5/5] Video Composition
 Stage 5 completed.
-final_video: outputs/composed/<page_name>/page_composed.mp4
-output_dir:   outputs/composed/<page_name>
+final_video: outputs/<video_stem>/composed/page_composed.mp4
+output_dir:   outputs/<video_stem>/composed
 ```
 
 ## Current Behavior
 
+- video-context script generation from sampled keyframes
+- video windows use left-closed, right-open frame assignment, so boundary keyframes belong to the next window
+- narration character budgets scale with keyframe count: `50 * keyframe_count` per window
+- narration prompts ask the VLM to prioritize large on-screen text because it is often annotation text
 - paragraph-level audio generation
 - optional paragraph selection and volume gain during Stage 3 voice generation
 - profile path accepts either a `.pt` file or a profile directory containing `<dirname>.pt`
-- text extraction filters some short header/footer-like slide text blocks based on layout position
 - optional cover intro support with `cover_image` and `cover_paragraph_index`
 - when a cover intro is enabled, the cover paragraph is excluded from body timeline alignment and the body starts from the next paragraph
 - optional outro page support with either fixed slogan audio or generated slogan audio
@@ -268,17 +290,19 @@ output_dir:   outputs/composed/<page_name>
 
 ## Limitations
 
-- some source PPT files may contain malformed text encoding
 - timeline alignment quality depends on UI visibility, subtitle availability, and visual distinction between adjacent segments
 - human review is still recommended for production-quality output
 - some sentence endings may require spoken-text rewriting for better TTS delivery
-- the current workflow is page-oriented rather than a full-deck production pipeline
+- generated narration can still require manual adjustment when UI text appears late within a merged window
 
 ## Project Structure
 
 - `outputs/voice_profiles/`: saved voice profiles `.pt`
-- `outputs/<voice_name>/<title>/`: generated voice artifacts for a page
-- `outputs/scripts/`: extracted text, spoken text, and timeline files
+- `outputs/<video_stem>/scripts/`: generated `spoken.json` and `extracted.json`
+- `outputs/<video_stem>/timeline_debug/`: Stage 1 keyframes, window manifests, prompts, and model responses
+- `outputs/<video_stem>/timeline/`: final timeline JSON and Stage 4 debug files
+- `outputs/<video_stem>/voice/`: generated voice segment WAVs and manifest
+- `outputs/<video_stem>/composed/`: final composed video and composition artifacts
 - `pipeline/`: reusable page-level workflow scripts and older tooling
 - `sample/`: reference examples or experiments
 
