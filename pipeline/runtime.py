@@ -641,7 +641,7 @@ def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
         if target_stage in {"script", "profile", "voice", "timeline", "compose"}:
             return "only", target_stage
         raise ValueError(
-            "Unsupported --only-stage value. Use one of: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose"
+            "Unsupported --only-stage value. Use one of: script, profile, voice, timeline, compose"
         )
 
     if args.from_stage:
@@ -649,7 +649,7 @@ def resolve_run_plan(args: argparse.Namespace) -> tuple[str, str | None]:
         if target_stage in {"script", "profile", "voice", "timeline", "compose"}:
             return "from", target_stage
         raise ValueError(
-            "Unsupported --from-stage value. Use one of: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose"
+            "Unsupported --from-stage value. Use one of: script, profile, voice, timeline, compose"
         )
 
     run_mode = prompt_choice(

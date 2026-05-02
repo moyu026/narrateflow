@@ -66,13 +66,26 @@ def ask_continue_or_stop(stage_name: str, allow_back: bool = True) -> str:
 
 
 def show_stage1_summary(result: dict[str, Any]) -> None:
-    print("Stage 1 completed.")
-    print(f"extracted_json: {result['extracted_path']}")
+    print("VLM script generation completed.")
     print(f"spoken_json:    {result['spoken_path']}")
     print("Review suggestions:")
     print("- Check page_XX.spoken.json")
     print("- Edit paragraphs[].spoken_text if wording needs adjustment")
-    print("- If visual context is wrong, rerun Stage 1 with keyframe settings adjusted")
+    print("- If visual context is wrong, rerun keyframe extraction with settings adjusted")
+
+
+def show_keyframe_summary(result: dict[str, Any]) -> None:
+    windows = result.get("windows", [])
+    keyframes = result.get("keyframes", {})
+    candidates = keyframes.get("candidates", [])
+    print("Keyframe extraction completed.")
+    print(f"keyframes_json:      {result['keyframes_path']}")
+    print(f"window_manifest:     {result['window_manifest_path']}")
+    print(f"keyframe_count:      {len(candidates)}")
+    print(f"window_count:        {len(windows)}")
+    print("Review suggestions:")
+    print("- Check timeline_debug/keyframes/")
+    print("- Check window_manifest.json if boundaries look wrong")
 
 
 def show_profile_summary(profile_path: Path) -> None:
@@ -84,7 +97,7 @@ def show_profile_summary(profile_path: Path) -> None:
 def show_stage2_summary(manifest_path: Path) -> dict[str, Any]:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     segments_dir = manifest_path.parent / "segments"
-    print("Stage 2 completed.")
+    print("Voice generation completed.")
     print(f"manifest: {manifest_path}")
     print(f"segments_dir: {segments_dir}")
     print("Available paragraphs:")
@@ -101,12 +114,12 @@ def show_stage2_summary(manifest_path: Path) -> dict[str, Any]:
 def ask_stage2_action(allow_back: bool = True) -> str:
     if allow_back:
         return prompt_choice(
-            "Stage 2 review action\n- c: continue to the next stage\n- r: regenerate one or more paragraphs\n- b: go back to Stage 1\n- s: stop here\nChoice",
+            "Voice generation review action\n- c: continue to the next stage\n- r: regenerate one or more paragraphs\n- b: go back to VLM script generation\n- s: stop here\nChoice",
             ["c", "r", "b", "s"],
             default="c",
         )
     return prompt_choice(
-        "Stage 2 review action\n- c: continue to the next stage\n- r: regenerate one or more paragraphs\n- s: stop here\nChoice",
+        "Voice generation review action\n- c: continue to the next stage\n- r: regenerate one or more paragraphs\n- s: stop here\nChoice",
         ["c", "r", "s"],
         default="c",
     )
@@ -173,7 +186,7 @@ def ask_regenerate_volume_gain() -> float | None:
 
 def show_stage3_summary(timeline_path: Path) -> dict[str, Any]:
     payload = json.loads(timeline_path.read_text(encoding="utf-8"))
-    print("Stage 3 completed.")
+    print("Timeline alignment completed.")
     print(f"timeline: {timeline_path}")
     print(f"status: {payload.get('status')}")
     print(f"missing: {payload.get('missing_paragraph_indices', [])}")
@@ -185,7 +198,7 @@ def show_stage3_summary(timeline_path: Path) -> dict[str, Any]:
 
 
 def show_stage4_summary(output_video: Path, output_dir: Path) -> None:
-    print("Stage 4 completed.")
+    print("Video composition completed.")
     print(f"final_video: {output_video}")
     print(f"output_dir:   {output_dir}")
     print("Review suggestions:")
