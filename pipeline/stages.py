@@ -19,7 +19,10 @@ from pipeline.ui import (
     stage_banner,
 )
 from timeline_align.run_timeline_align import run_timeline_align
-from timeline_align.video_script import run_video_script_generate
+from timeline_align.video_script import (
+    generate_video_script_from_windows,
+    prepare_video_script_windows,
+)
 from video_compose.run_video_compose import run_video_compose
 
 
@@ -51,27 +54,45 @@ def default_compose_output_dir(source_path: Path, config: dict[str, Any]) -> Pat
 
 
 def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
-    output_dir = default_stage1_output_dir(config)
+    prepared = run_stage1_keyframes(config)
+    return run_stage1_vlm(config, prepared)
+
+
+def run_stage1_keyframes(config: dict[str, Any]) -> dict[str, Any]:
     debug_dir = (
         Path(config["timeline_debug_dir"])
         if config.get("timeline_debug_dir")
         else video_output_root(config["video"]) / "timeline_debug"
     )
-    return run_video_script_generate(
+    return prepare_video_script_windows(
         video=Path(config["video"]),
-        output_dir=output_dir,
         debug_dir=debug_dir,
-        gemini_api_key=config.get("api_key"),
-        reference_text_path=Path(config["reference_text"]) if config.get("reference_text") else None,
         cover_image=Path(config["cover_image"]) if config.get("cover_image") else None,
         cover_duration_sec=config.get("cover_duration_sec"),
-        enable_ocr=bool(config.get("enable_ocr", False)),
         frame_stride=config.get("frame_stride"),
         min_gap_sec=float(config.get("min_gap_sec") or 2.0),
         global_threshold=float(config.get("global_threshold") or 12.0),
         subtitle_threshold=float(config.get("subtitle_threshold") or 8.0),
         detection_max_width=int(config.get("detection_max_width") or 960),
         fill_gap_sec=float(config.get("fill_gap_sec") or 6.0),
+    )
+
+
+def run_stage1_vlm(config: dict[str, Any], prepared: dict[str, Any]) -> dict[str, Any]:
+    output_dir = default_stage1_output_dir(config)
+    debug_dir = (
+        Path(config["timeline_debug_dir"])
+        if config.get("timeline_debug_dir")
+        else video_output_root(config["video"]) / "timeline_debug"
+    )
+    return generate_video_script_from_windows(
+        video=Path(config["video"]),
+        output_dir=output_dir,
+        debug_dir=debug_dir,
+        windows=prepared["windows"],
+        gemini_api_key=config.get("api_key"),
+        reference_text_path=Path(config["reference_text"]) if config.get("reference_text") else None,
+        enable_ocr=bool(config.get("enable_ocr", False)),
     )
 
 
@@ -153,7 +174,7 @@ def rerun_stage2_for_target(
 
 def ask_only_voice_action(*, allow_back: bool) -> str:
     return prompt_choice(
-        "Stage 2 review action\n- r: regenerate one or more paragraphs\n- s: stop here\nChoice",
+        "Voice generation review action\n- r: regenerate one or more paragraphs\n- s: stop here\nChoice",
         ["r", "s"],
         default="s",
     )
@@ -164,14 +185,14 @@ def ensure_profile_ready(
 ) -> tuple[dict[str, Any], Path]:
     profile_path = Path(config["profile"]) if config.get("profile") else None
     if profile_path is None:
-        stage_banner(2, total, "Voice Profile Generation")
+        stage_banner(3, total, "Voice Profile Generation")
         profile_path = run_stage2_profile(config)
         config["profile"] = str(profile_path)
         show_profile_summary(profile_path)
         return config, profile_path
 
     print()
-    print(f"[2/{total}] Voice Profile Generation (skipped, using existing profile)")
+    print(f"[3/{total}] Voice Profile Generation (skipped, using existing profile)")
     print(f"profile_path: {profile_path}")
     return config, profile_path
 
@@ -224,7 +245,7 @@ def run_profile_and_voice_stages(
 ) -> tuple[dict[str, Any], Path, str]:
     config = reload_runtime_config(args, config)
     config, profile_path = ensure_profile_ready(config, total)
-    stage_banner(3, total, "Voice Generation")
+    stage_banner(4, total, "Voice Generation")
     return run_voice_stage_with_review(
         args=args,
         config=config,
