@@ -6,7 +6,7 @@ from typing import Any
 
 from pipeline.paths import infer_page_from_spoken_json, resolve_profile_path
 from pipeline.runtime import reload_runtime_config
-from pipeline.shared import OUTPUTS_DIR, slugify, write_json
+from pipeline.shared import video_output_root, write_json
 from pipeline.ui import (
     ask_regenerate_target,
     ask_regenerate_volume_gain,
@@ -26,14 +26,14 @@ from video_compose.run_video_compose import run_video_compose
 def default_stage1_output_dir(config: dict[str, Any]) -> Path | None:
     if config.get("stage1_output_dir"):
         return Path(config["stage1_output_dir"])
-    return None
+    return video_output_root(config["video"]) / "scripts"
 
 
 def default_timeline_output(spoken_json: Path, config: dict[str, Any]) -> Path:
     if config.get("timeline_output"):
         return Path(config["timeline_output"])
     page = int(config.get("page") or infer_page_from_spoken_json(spoken_json))
-    return spoken_json.parent / f"page_{page:02d}.timeline.final.json"
+    return video_output_root(config["video"]) / "timeline" / f"page_{page:02d}.timeline.final.json"
 
 
 def default_timeline_debug_dir(
@@ -41,28 +41,21 @@ def default_timeline_debug_dir(
 ) -> Path | None:
     if config.get("timeline_debug_dir"):
         return Path(config["timeline_debug_dir"])
-    page = int(config.get("page") or infer_page_from_spoken_json(spoken_json))
-    return OUTPUTS_DIR / "timeline_debug" / f"page_{page:02d}_debug"
+    return video_output_root(config["video"]) / "timeline" / "debug"
 
 
 def default_compose_output_dir(source_path: Path, config: dict[str, Any]) -> Path:
     if config.get("compose_output_dir"):
         return Path(config["compose_output_dir"])
-    page_token = source_path.stem.replace(".timeline", "")
-    page_name = f"{slugify(page_token, max_len=36)}_{slugify(Path(config['video']).stem, max_len=36)}"
-    return OUTPUTS_DIR / "composed" / page_name
+    return video_output_root(config["video"]) / "composed"
 
 
 def run_stage1(config: dict[str, Any]) -> dict[str, Any]:
-    output_dir = default_stage1_output_dir(config) or (
-        OUTPUTS_DIR / "scripts" / slugify(Path(config["video"]).stem, max_len=60)
-    )
+    output_dir = default_stage1_output_dir(config)
     debug_dir = (
         Path(config["timeline_debug_dir"])
         if config.get("timeline_debug_dir")
-        else OUTPUTS_DIR
-        / "timeline_debug"
-        / slugify(Path(config["video"]).stem, max_len=36)
+        else video_output_root(config["video"]) / "timeline_debug"
     )
     return run_video_script_generate(
         video=Path(config["video"]),
@@ -112,7 +105,7 @@ def run_stage2_voice(
             volume_gain=volume_gain,
             output_dir=Path(config["voice_output_dir"])
             if config.get("voice_output_dir")
-            else None,
+            else video_output_root(config["video"]) / "voice",
         )
         return Path(result["manifest_path"])
 
@@ -126,7 +119,7 @@ def run_stage2_voice(
             volume_gain=volume_gain,
             output_dir=Path(config["voice_output_dir"])
             if config.get("voice_output_dir")
-            else None,
+            else video_output_root(config["video"]) / "voice",
         )
         manifest_path = Path(result["manifest_path"])
     if manifest_path is None:

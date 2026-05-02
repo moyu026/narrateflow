@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import math
@@ -29,40 +29,33 @@ def read_reference_text(reference_text: Path | None) -> str:
 def build_global_summary(
     cover_image: Path | None,
     reference_text: str,
-    video_stem: str,
 ) -> str:
     if reference_text:
         snippet = reference_text.replace("\r", " ").replace("\n", " ").strip()
-        return f"本视频主题与术语约束：{snippet[:100]}"
+        return f"参考资料摘要：{snippet}"
     if cover_image is not None:
-        return f"本视频围绕封面主题展开，标题线索来自 {cover_image.stem}。"
-    if video_stem.isdigit() or len(video_stem.strip()) <= 2:
-        return "本视频展示一个软件操作流程，请保持术语一致并直接进入操作讲解。"
-    return f"本视频围绕 {video_stem} 展开，请保持术语一致并直接进入操作讲解。"
+        return f"视频包含封面图 {cover_image.stem}，请保持讲解直接、连贯。"
+    return "视频内容将按关键画面生成讲解，请保持术语一致并直接进入操作说明。"
 
 
 def normalize_video_title(video_stem: str) -> str:
-    stem = str(video_stem or "").strip()
-    if not stem or stem.isdigit() or len(stem) <= 2:
-        return "视频操作讲解"
-    return stem
+    return "视频讲解"
 
 
 def build_cover_prompt(reference_text: str) -> str:
     lines = [
-        "这是视频封面。",
-        "请根据封面文字提炼视频主题，并生成一段简洁的中文开场白。",
-        "不要描述背景色、装饰、排版。",
+        "你正在为一个视频撰写简短的封面页旁白。",
+        "只返回 JSON，不要输出额外说明。",
+        "spoken_text 要简洁、自然，适合直接朗读。",
     ]
     if reference_text:
-        lines.append(f"术语约束: {reference_text[:800]}")
-    lines.append("请严格返回 JSON。")
+        lines.append(f"参考文本：{reference_text}")
     lines.append(
         json.dumps(
             {
-                "global_summary": "一句话概括全视频主题",
-                "cover_title": "提炼出的标题",
-                "spoken_text": "今天我们来讲……",
+                "global_summary": "简要概括视频主题。",
+                "cover_title": "视频讲解",
+                "spoken_text": "这里是本视频的开场背景。",
                 "reference_terms_used": [],
             },
             ensure_ascii=False,
@@ -105,6 +98,7 @@ def build_cover_window(
 def build_video_windows(
     keyframes_payload: dict[str, Any],
     min_window_sec: float = 2.5,
+    max_window_sec: float = 6.0,
 ) -> list[dict[str, Any]]:
     duration = float(keyframes_payload.get("duration", 0.0) or 0.0)
     candidates = sorted(
@@ -132,10 +126,12 @@ def build_video_windows(
     for idx in range(len(boundaries) - 1):
         start = boundaries[idx]
         end = boundaries[idx + 1]
+        is_last_window = idx == len(boundaries) - 2
         frames = [
             item
             for item in candidates
-            if start <= float(item["time"]) <= end
+            if start <= float(item["time"]) < end
+            or (is_last_window and float(item["time"]) == end)
         ]
         raw_windows.append(
             {
@@ -144,26 +140,53 @@ def build_video_windows(
                 "end_time": round(end, 3),
                 "frames": frames,
                 "is_cover": False,
+                "max_global_score": max(
+                    float(frame.get("global_score", 0.0))
+                    for frame in frames
+                    if float(frame.get("time", 0.0)) > float(start)
+                )
+                if any(float(frame.get("time", 0.0)) > float(start) for frame in frames)
+                else 0.0,
             }
         )
 
     merged: list[dict[str, Any]] = []
     for window in raw_windows:
         duration_sec = float(window["end_time"]) - float(window["start_time"])
+        merged_duration = (
+            float(window["end_time"]) - float(merged[-1]["start_time"])
+            if merged
+            else duration_sec
+        )
         if (
             merged
             and duration_sec < min_window_sec
+            and float(window.get("max_global_score", 0.0)) < 12.0
+            and merged_duration <= max_window_sec
         ):
             merged[-1]["end_time"] = window["end_time"]
             merged[-1]["frames"].extend(window.get("frames", []))
+            merged[-1]["max_global_score"] = max(
+                float(merged[-1].get("max_global_score", 0.0)),
+                float(window.get("max_global_score", 0.0)),
+            )
             continue
         merged.append(window)
 
     if len(merged) >= 2:
         last_duration = float(merged[-1]["end_time"]) - float(merged[-1]["start_time"])
-        if last_duration < min_window_sec:
+        merged_duration = float(merged[-1]["end_time"]) - float(merged[-2]["start_time"])
+        if (
+            last_duration < min_window_sec
+            and float(merged[-1].get("max_global_score", 0.0)) < 12.0
+            and merged_duration <= max_window_sec
+        ):
             merged[-2]["end_time"] = merged[-1]["end_time"]
             merged[-2]["frames"].extend(merged[-1].get("frames", []))
+            merged[-2]["max_global_score"] = max(
+                float(merged[-2].get("max_global_score", 0.0)),
+                float(merged[-1].get("max_global_score", 0.0)),
+            )
             merged.pop()
 
     for index, window in enumerate(merged, start=1):
@@ -187,17 +210,24 @@ def estimate_tts_duration(text: str, chars_per_sec: float = 4.0) -> float:
     return round(len(clean) / chars_per_sec, 3)
 
 
+def calculate_window_max_chars(
+    window: dict[str, Any], chars_per_keyframe: int = 50
+) -> int:
+    keyframe_count = max(1, len(window.get("frames", [])))
+    return int(chars_per_keyframe * keyframe_count)
+
+
 def compress_text_to_limit(text: str, limit: int) -> str:
     clean = " ".join(str(text or "").split()).strip()
     if len(clean) <= limit:
         return clean
 
-    clauses = [item.strip() for item in re.split(r"[，,。；;：:]", clean) if item.strip()]
+    clauses = [item.strip() for item in re.split(r"[锛?銆傦紱;锛?]", clean) if item.strip()]
     for clause in reversed(clauses):
         if len(clause) <= limit:
             return clause
 
-    trimmed = clean[:limit].rstrip(" ，,。；;：:")
+    trimmed = clean[:limit].rstrip(" 锛?銆傦紱;锛?")
     if trimmed and trimmed[-1].isascii() and trimmed[-1].isalpha():
         while trimmed and trimmed[-1].isascii() and trimmed[-1].isalpha():
             trimmed = trimmed[:-1]
@@ -213,21 +243,21 @@ def sanitize_transition_prefix(text: str, previous_context_type: str) -> str:
         return clean
 
     prefixes = [
+        "首先",
+        "第一步",
         "接下来",
-        "紧接着",
         "然后",
         "接着",
-        "随后",
         "现在",
-        "并且",
-        "并",
+        "这里",
     ]
     changed = True
     while changed and clean:
         changed = False
+        lower_clean = clean.lower()
         for prefix in prefixes:
-            if clean.startswith(prefix):
-                clean = clean[len(prefix):].lstrip("，,。；;：: ")
+            if lower_clean.startswith(prefix):
+                clean = clean[len(prefix):].lstrip(" ，,。；;：:.-")
                 changed = True
                 break
     return clean
@@ -240,37 +270,34 @@ def build_batch_prompt(
     reference_text: str,
 ) -> str:
     lines = [
-        "你是一名中文视频解说撰稿助手。",
-        "请基于每个窗口内按时间顺序排列的多张图片，为每个窗口各写一条简洁解说。",
-        "请按窗口顺序依次生成，后一个窗口要自然承接前一个窗口的解说。",
-        "直接进入动作、意图或结论，像解说员一样说话。",
-        "禁止使用“在这张图中我们看到”“画面显示了”等废话开场。",
-        "禁止逐帧复述视觉元素。",
-        "禁止描述当前窗口外未发生的动作。",
-        "请注意图片左上角的 #N 标记，它代表该窗口内的时间顺序。",
-        f"全局摘要: {global_summary}",
-        f"上一段上下文: {previous_context}",
+        "你正在为视频片段生成简洁的口播旁白。",
+        "只返回 JSON 数组，每个对象包含 window_id、spoken_text、is_silent、reason 和 reference_terms_used。",
+        "请结合全局摘要和上一段旁白，保持上下文连贯。",
+        "如果有大号文字，重点关注画面中的大号文字，这类文字通常是对当前步骤或画面重点的注解。",
+        "尽量让每个 spoken_text 不超过对应的字数预算。",
+        f"全局摘要：{global_summary}",
+        f"上一段上下文：{previous_context}",
     ]
     if previous_context == "[START_OF_VIDEO]":
-        lines.append("第一条解说是视频开场后的首个步骤，禁止用“并、然后、接着、接下来、随后”这类承接词开头。")
+        lines.append("这是视频的第一个口播窗口，请直接进入有用内容。")
     elif previous_context.startswith("[SILENT_GAP:"):
-        lines.append("当前窗口前存在静默停顿，禁止用“并、然后、接着、接下来、随后”这类强连续承接词开头。")
+        lines.append("这一批窗口前有一段静默，请自然恢复讲解，不要特意说明静默。")
     if reference_text:
-        lines.append(f"参考术语约束: {reference_text[:800]}")
-    lines.append("请返回 JSON 数组，每个元素对应一个窗口。")
+        lines.append(f"参考文本：{reference_text}")
+    lines.append("窗口字数预算：")
     for window in windows:
         budget = int(window["max_chars"])
         lines.append(
-            f"- {window['window_id']}: {window['start_time']:.2f}s - {window['end_time']:.2f}s, 最多 {budget} 个字。"
+            f"- {window['window_id']}: {float(window['start_time']):.2f}s - {float(window['end_time']):.2f}s，约 {budget} 个字"
         )
     lines.append(
         json.dumps(
             [
                 {
                     "window_id": window["window_id"],
-                    "spoken_text": "示例解说",
+                    "spoken_text": "这个窗口对应的简洁旁白。",
                     "is_silent": False,
-                    "reason": "一句简要原因",
+                    "reason": "画面有明显变化",
                     "reference_terms_used": [],
                 }
                 for window in windows
@@ -283,10 +310,9 @@ def build_batch_prompt(
 
 def _fallback_window_result(window: dict[str, Any], is_silent: bool) -> dict[str, Any]:
     if window.get("is_cover"):
-        text = "今天我们来讲这个主题。"
         return {
             "window_id": window["window_id"],
-            "spoken_text": text[: int(window["max_chars"])],
+            "spoken_text": "这里是本视频的开场背景。",
             "is_silent": False,
             "reason": "fallback_cover",
             "reference_terms_used": [],
@@ -299,10 +325,9 @@ def _fallback_window_result(window: dict[str, Any], is_silent: bool) -> dict[str
             "reason": "low_visual_change",
             "reference_terms_used": [],
         }
-    fallback = "请按当前步骤继续操作。"
     return {
         "window_id": window["window_id"],
-        "spoken_text": fallback[: int(window["max_chars"])],
+        "spoken_text": "这个窗口展示了视频中的明显变化。",
         "is_silent": False,
         "reason": "fallback_text",
         "reference_terms_used": [],
@@ -326,7 +351,7 @@ def _normalize_batch_results(
         if is_silent and not spoken_text:
             item["is_silent"] = True
         item["window_id"] = window["window_id"]
-        item["spoken_text"] = compress_text_to_limit(spoken_text, int(window["max_chars"]))
+        item["spoken_text"] = spoken_text
         item.setdefault("reference_terms_used", [])
         item["needs_review"] = bool(
             estimate_tts_duration(item["spoken_text"]) > float(window["duration_budget"])
@@ -448,7 +473,7 @@ def generate_cover_intro(
         parsed = safe_parse_json_from_content(str(response.get("content", "")))
     except Exception:
         parsed = {}
-    spoken_text = str(parsed.get("spoken_text", "")).strip() or "今天我们来讲这个主题。"
+    spoken_text = str(parsed.get("spoken_text", "")).strip() or "这里是本视频的开场背景。"
     draft = {
         "window_id": cover_window["window_id"],
         "start_time": round(float(cover_window["start_time"]), 3),
@@ -456,7 +481,7 @@ def generate_cover_intro(
         "source_frames": [
             {"time": 0.0, "image_path": cover_window["frames"][0]["image_path"]}
         ],
-        "spoken_text": spoken_text[: int(cover_window["max_chars"])],
+        "spoken_text": spoken_text,
         "is_silent": False,
         "silent_duration": 0.0,
         "is_cover": True,
@@ -473,7 +498,6 @@ def generate_cover_intro(
     return draft, global_summary or build_global_summary(
         cover_image=Path(cover_window["frames"][0]["image_path"]),
         reference_text=reference_text,
-        video_stem=Path(cover_window["frames"][0]["image_path"]).stem,
     )
 
 
@@ -594,9 +618,8 @@ def run_video_script_generate(
         window_duration = max(
             0.5, float(window["end_time"]) - float(window["start_time"])
         )
-        max_chars = 10 if window.get("is_cover") else max(8, math.floor((window_duration + 0.8) * 4))
         window["duration_budget"] = round(window_duration + 0.8, 3)
-        window["max_chars"] = int(max_chars)
+        window["max_chars"] = calculate_window_max_chars(window)
 
     write_json(debug_dir / "window_manifest.json", {"windows": windows})
     cover_draft: dict[str, Any] | None = None
@@ -612,7 +635,6 @@ def run_video_script_generate(
         global_summary = build_global_summary(
             cover_image=cover_image,
             reference_text=reference_text,
-            video_stem=video.stem,
         )
     write_json(debug_dir / "global_summary.json", {"global_summary": global_summary})
 

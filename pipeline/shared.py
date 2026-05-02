@@ -36,3 +36,7 @@ def slugify(value: str, max_len: int = 60) -> str:
     cleaned = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", str(value).strip())
     cleaned = re.sub(r"_+", "_", cleaned).strip("._")
     return (cleaned or "untitled")[:max_len]
+
+
+def video_output_root(video: str | Path) -> Path:
+    return OUTPUTS_DIR / slugify(Path(video).stem, max_len=60)

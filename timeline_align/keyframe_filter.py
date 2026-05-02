@@ -45,11 +45,62 @@ def compute_text_like_score(curr: np.ndarray, prev: np.ndarray) -> float:
     return compute_text_like_score_from_masks(curr_mask, prev_mask)
 
 
+def estimate_vertical_mask_translation(
+    curr_mask: np.ndarray, prev_mask: np.ndarray
+) -> float:
+    if not np.any(curr_mask) or not np.any(prev_mask):
+        return 0.0
+    height = curr_mask.shape[0]
+    max_shift = max(1, int(round(height * 0.35)))
+    best_shift = 0
+    best_score = float("inf")
+    for shift_y in range(-max_shift, max_shift + 1):
+        overlap_height = height - abs(shift_y)
+        if overlap_height <= 0:
+            continue
+        prev_y0 = max(0, -shift_y)
+        curr_y0 = max(0, shift_y)
+        prev_view = prev_mask[prev_y0 : prev_y0 + overlap_height, :]
+        curr_view = curr_mask[curr_y0 : curr_y0 + overlap_height, :]
+        score = float(np.mean(cv2.absdiff(curr_view, prev_view)))
+        if score < best_score - 1e-6 or (
+            abs(score - best_score) <= 1e-6 and abs(shift_y) < abs(best_shift)
+        ):
+            best_score = score
+            best_shift = shift_y
+    return float(best_shift)
+
+
+def compute_aligned_mask_difference(
+    curr_mask: np.ndarray, prev_mask: np.ndarray, dy: float
+) -> float:
+    shift_y = int(round(dy))
+    height, width = curr_mask.shape[:2]
+    overlap_height = height - abs(shift_y)
+    if overlap_height <= 0:
+        diff = cv2.absdiff(curr_mask, prev_mask)
+        return float(np.mean(diff))
+
+    prev_y0 = max(0, -shift_y)
+    curr_y0 = max(0, shift_y)
+
+    prev_view = prev_mask[
+        prev_y0 : prev_y0 + overlap_height,
+        :width,
+    ]
+    curr_view = curr_mask[
+        curr_y0 : curr_y0 + overlap_height,
+        :width,
+    ]
+    diff = cv2.absdiff(curr_view, prev_view)
+    return float(np.mean(diff))
+
+
 def compute_text_like_score_from_masks(
     curr_mask: np.ndarray, prev_mask: np.ndarray
 ) -> float:
-    diff = cv2.absdiff(curr_mask, prev_mask)
-    return float(np.mean(diff))
+    dy = estimate_vertical_mask_translation(curr_mask, prev_mask)
+    return compute_aligned_mask_difference(curr_mask, prev_mask, dy)
 
 
 def write_frame_image(image_path: Path, frame: np.ndarray) -> None:
