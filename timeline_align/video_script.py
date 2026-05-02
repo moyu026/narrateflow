@@ -143,9 +143,8 @@ def build_video_windows(
                 "max_global_score": max(
                     float(frame.get("global_score", 0.0))
                     for frame in frames
-                    if float(frame.get("time", 0.0)) > float(start)
                 )
-                if any(float(frame.get("time", 0.0)) > float(start) for frame in frames)
+                if frames
                 else 0.0,
             }
         )
@@ -273,7 +272,7 @@ def build_batch_prompt(
         "你正在为视频片段生成简洁的口播旁白。",
         "只返回 JSON 数组，每个对象包含 window_id、spoken_text、is_silent、reason 和 reference_terms_used。",
         "请结合全局摘要和上一段旁白，保持上下文连贯。",
-        "如果有大号文字，重点关注画面中的大号文字，这类文字通常是对当前步骤或画面重点的注解。",
+        "如果有大号文字，重点关注画面中的大号文字，这类文字通常是对当前步骤或画面重点的注解，但是不要出现‘正如画面大号文字所提示的’这种描述。",
         "尽量让每个 spoken_text 不超过对应的字数预算。",
         f"全局摘要：{global_summary}",
         f"上一段上下文：{previous_context}",
@@ -574,16 +573,11 @@ def build_spoken_payload(
     }
 
 
-def run_video_script_generate(
+def prepare_video_script_windows(
     video: Path,
-    output_dir: Path,
     debug_dir: Path,
-    gemini_api_key: str | None = None,
-    reference_text_path: Path | None = None,
     cover_image: Path | None = None,
     cover_duration_sec: float | None = None,
-    enable_ocr: bool = False,
-    batch_size: int = 3,
     frame_stride: int | None = None,
     min_gap_sec: float = 2.0,
     global_threshold: float = 12.0,
@@ -592,7 +586,6 @@ def run_video_script_generate(
     fill_gap_sec: float = 6.0,
 ) -> dict[str, Any]:
     debug_dir.mkdir(parents=True, exist_ok=True)
-    reference_text = read_reference_text(reference_text_path)
     windows: list[dict[str, Any]] = []
     if cover_image is not None:
         windows.append(
@@ -621,7 +614,30 @@ def run_video_script_generate(
         window["duration_budget"] = round(window_duration + 0.8, 3)
         window["max_chars"] = calculate_window_max_chars(window)
 
-    write_json(debug_dir / "window_manifest.json", {"windows": windows})
+    keyframes_path = debug_dir / "keyframes.json"
+    window_manifest_path = debug_dir / "window_manifest.json"
+    write_json(window_manifest_path, {"windows": windows})
+    return {
+        "keyframes_path": keyframes_path,
+        "window_manifest_path": window_manifest_path,
+        "keyframes": keyframes_payload,
+        "windows": windows,
+    }
+
+
+def generate_video_script_from_windows(
+    video: Path,
+    output_dir: Path,
+    debug_dir: Path,
+    windows: list[dict[str, Any]],
+    gemini_api_key: str | None = None,
+    reference_text_path: Path | None = None,
+    enable_ocr: bool = False,
+    batch_size: int = 3,
+) -> dict[str, Any]:
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    reference_text = read_reference_text(reference_text_path)
+    windows = [dict(window) for window in windows]
     cover_draft: dict[str, Any] | None = None
     if windows and windows[0].get("is_cover"):
         cover_draft, cover_summary = generate_cover_intro(
@@ -633,7 +649,7 @@ def run_video_script_generate(
         windows = windows[1:]
     else:
         global_summary = build_global_summary(
-            cover_image=cover_image,
+            cover_image=None,
             reference_text=reference_text,
         )
     write_json(debug_dir / "global_summary.json", {"global_summary": global_summary})
@@ -659,22 +675,49 @@ def run_video_script_generate(
         ocr_enabled=enable_ocr,
     )
     spoken_path = output_dir / "page_01.spoken.json"
-    extracted_path = output_dir / "page_01.extracted.json"
     write_json(spoken_path, spoken_payload)
-    write_json(
-        extracted_path,
-        {
-            "source_path": str(video.resolve()),
-            "source_type": "video_context_windows",
-            "page": 1,
-            "paragraph_count": len(spoken_payload["paragraphs"]),
-            "paragraphs": spoken_payload["paragraphs"],
-            "global_summary": global_summary,
-        },
-    )
     return {
         "spoken_path": spoken_path,
-        "extracted_path": extracted_path,
         "spoken": spoken_payload,
-        "extracted": json.loads(extracted_path.read_text(encoding="utf-8")),
     }
+
+
+def run_video_script_generate(
+    video: Path,
+    output_dir: Path,
+    debug_dir: Path,
+    gemini_api_key: str | None = None,
+    reference_text_path: Path | None = None,
+    cover_image: Path | None = None,
+    cover_duration_sec: float | None = None,
+    enable_ocr: bool = False,
+    batch_size: int = 3,
+    frame_stride: int | None = None,
+    min_gap_sec: float = 2.0,
+    global_threshold: float = 12.0,
+    subtitle_threshold: float = 8.0,
+    detection_max_width: int = 960,
+    fill_gap_sec: float = 6.0,
+) -> dict[str, Any]:
+    prepared = prepare_video_script_windows(
+        video=video,
+        debug_dir=debug_dir,
+        cover_image=cover_image,
+        cover_duration_sec=cover_duration_sec,
+        frame_stride=frame_stride,
+        min_gap_sec=min_gap_sec,
+        global_threshold=global_threshold,
+        subtitle_threshold=subtitle_threshold,
+        detection_max_width=detection_max_width,
+        fill_gap_sec=fill_gap_sec,
+    )
+    return generate_video_script_from_windows(
+        video=video,
+        output_dir=output_dir,
+        debug_dir=debug_dir,
+        windows=prepared["windows"],
+        gemini_api_key=gemini_api_key,
+        reference_text_path=reference_text_path,
+        enable_ocr=enable_ocr,
+        batch_size=batch_size,
+    )

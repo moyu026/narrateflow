@@ -23,6 +23,8 @@ from pipeline.stages import (
     ask_only_voice_action,
     run_profile_and_voice_stages,
     run_stage1,
+    run_stage1_keyframes,
+    run_stage1_vlm,
     run_stage2_profile,
     run_stage3,
     run_stage4,
@@ -32,6 +34,7 @@ from pipeline.ui import (
     ask_continue_or_stop,
     ask_stage2_action,
     show_profile_summary,
+    show_keyframe_summary,
     show_stage1_summary,
     show_stage3_summary,
     show_stage4_summary,
@@ -77,11 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(
         "--only-stage",
-        help="Run only one stage. Supported values: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose",
+        help="Run only one stage. Supported values: script, profile, voice, timeline, compose",
     )
     parser.add_argument(
         "--from-stage",
-        help="Start from one stage and continue. Supported values: 1/script, 2/profile, 3/voice, 4/timeline, 5/compose",
+        help="Start from one stage and continue. Supported values: script, profile, voice, timeline, compose",
     )
     return parser
 
@@ -105,24 +108,27 @@ def main() -> None:
         section = ask_edit_section(config, run_mode, target_stage)
         clear_args_for_section(args, section)
 
-    total = 5
+    total = 6
 
     if run_mode == "only":
         if target_stage == "script":
             config = reload_runtime_config(args, config)
-            stage_banner(1, total, "Video Script Generation")
-            stage1_result = run_stage1(config)
+            stage_banner(1, total, "Keyframe Extraction")
+            prepared = run_stage1_keyframes(config)
+            show_keyframe_summary(prepared)
+            stage_banner(2, total, "VLM Script Generation")
+            stage1_result = run_stage1_vlm(config, prepared)
             show_stage1_summary(stage1_result)
             return
         if target_stage == "profile":
             config = reload_runtime_config(args, config)
-            stage_banner(2, total, "Voice Profile Generation")
+            stage_banner(3, total, "Voice Profile Generation")
             profile_path = run_stage2_profile(config)
             config["profile"] = str(profile_path)
             show_profile_summary(profile_path)
             return
         if target_stage == "voice":
-            stage_banner(3, total, "Voice Generation")
+            stage_banner(4, total, "Voice Generation")
             config, manifest_path, action = run_voice_stage_with_review(
                 args=args,
                 config=config,
@@ -139,13 +145,13 @@ def main() -> None:
             raise ValueError(f"Unexpected voice stage action: {action}")
         if target_stage == "timeline":
             config = reload_runtime_config(args, config)
-            stage_banner(4, total, "Timeline Alignment")
+            stage_banner(5, total, "Timeline Alignment")
             timeline_path = run_stage3(config, ensure_spoken_json_path(config))
             show_stage3_summary(timeline_path)
             return
         if target_stage == "compose":
             config = reload_runtime_config(args, config)
-            stage_banner(5, total, "Video Composition")
+            stage_banner(6, total, "Video Composition")
             composed_path = run_stage4(
                 config,
                 ensure_timeline_path(config),
@@ -161,14 +167,24 @@ def main() -> None:
     if run_mode == "full":
         while True:
             config = reload_runtime_config(args, config)
-            stage_banner(1, total, "Video Script Generation")
-            stage1_result = run_stage1(config)
+            stage_banner(1, total, "Keyframe Extraction")
+            prepared = run_stage1_keyframes(config)
+            show_keyframe_summary(prepared)
+            action = ask_continue_or_stop("Stage 1", allow_back=False)
+            if action == "s":
+                return
+
+            config = reload_runtime_config(args, config)
+            stage_banner(2, total, "VLM Script Generation")
+            stage1_result = run_stage1_vlm(config, prepared)
             show_stage1_summary(stage1_result)
-            action = ask_continue_or_stop("Stage 1")
+            action = ask_continue_or_stop("Stage 2")
             if action == "s":
                 return
             if action == "c":
                 break
+            if action == "b":
+                continue
 
         while True:
             config, manifest_path, action = run_profile_and_voice_stages(
@@ -209,13 +225,13 @@ def main() -> None:
     ):
         while True:
             config = reload_runtime_config(args, config)
-            stage_banner(4, total, "Timeline Alignment")
+            stage_banner(5, total, "Timeline Alignment")
             timeline_path = run_stage3(
                 config, ensure_spoken_json_path(config, stage1_result)
             )
             show_stage3_summary(timeline_path)
             action = ask_continue_or_stop(
-                "Stage 4",
+                "Stage 5",
                 allow_back=not (run_mode == "from" and target_stage == "timeline"),
             )
             if action == "s":
@@ -225,7 +241,7 @@ def main() -> None:
                 profile_path = (
                     Path(config["profile"]) if config.get("profile") else None
                 )
-                stage_banner(3, total, "Voice Generation")
+                stage_banner(4, total, "Voice Generation")
                 config, manifest_path, action2 = run_voice_stage_with_review(
                     args=args,
                     config=config,
@@ -254,7 +270,7 @@ def main() -> None:
     if timeline_path is None:
         raise ValueError("Timeline path is required before video composition.")
 
-    stage_banner(5, total, "Video Composition")
+    stage_banner(6, total, "Video Composition")
     config = reload_runtime_config(args, config)
     composed_path = run_stage4(config, timeline_path, manifest_path)
     show_stage4_summary(composed_path, composed_path.parent)

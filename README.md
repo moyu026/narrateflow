@@ -43,17 +43,18 @@ The default configuration file is `config/video_mode.toml`. Fill in the video pa
 
 The pipeline supports three execution modes:
 
-1. `full`: run the complete pipeline from Stage 1 to Stage 5
+1. `full`: run the complete pipeline from Stage 1 to Stage 6
 2. `only`: run only one stage
 3. `from`: start from a stage and continue forward
 
 Stage names:
 
-1. `script`: video keyframe sampling and narration drafting
-2. `profile`: voice profile generation
-3. `voice`: voice generation
-4. `timeline`: timeline JSON generation
-5. `compose`: final video composition
+1. Keyframe extraction: sample keyframes and build `window_manifest.json`
+2. VLM script generation: call Gemini on the prepared windows and write narration JSON
+3. Voice profile generation
+4. Voice generation
+5. Timeline JSON generation
+6. Final video composition
 
 Default outputs are grouped by video:
 
@@ -61,8 +62,7 @@ Default outputs are grouped by video:
 outputs/
 └── <video_stem>/
     ├── scripts/
-    │   ├── page_01.spoken.json
-    │   └── page_01.extracted.json
+    │   └── page_01.spoken.json
     ├── timeline_debug/
     │   ├── keyframes/
     │   ├── keyframes.json
@@ -131,24 +131,24 @@ You can also run a single stage from the config:
 python run_pipeline.py --only-stage script
 ```
 
-### Stage 1. Video Script Generation
+### Stage 1. Keyframe Extraction
 
 **Output and Review**
 
 Check:
 - sampled keyframes
 - generated narration windows
-- spoken narration wording
-- whether large on-screen annotation text was interpreted correctly
 
 Edit if needed:
-- `page_01.spoken.json -> paragraphs[].spoken_text`
+- keyframe settings in `config/video_mode.toml`
 
 ```text
-[1/5] Video Script Generation
-Stage 1 completed.
-extracted_json: outputs/<video_stem>/scripts/page_01.extracted.json
-spoken_json:    outputs/<video_stem>/scripts/page_01.spoken.json
+[1/6] Keyframe Extraction
+Keyframe extraction completed.
+keyframes_json:      outputs/<video_stem>/timeline_debug/keyframes.json
+window_manifest:     outputs/<video_stem>/timeline_debug/window_manifest.json
+keyframe_count:      32
+window_count:        8
 
 Stage 1 review action
 - c: continue to the next stage
@@ -156,16 +156,40 @@ Stage 1 review action
 Choice (c/s) [c]: c
 ```
 
-### Stage 2. Voice Profile Generation
+### Stage 2. VLM Script Generation
+
+**Output and Review**
+
+Check:
+- spoken narration wording
+- whether large on-screen annotation text was interpreted correctly
+- whether each narration paragraph starts at the expected window
+
+Edit if needed:
+- `page_01.spoken.json -> paragraphs[].spoken_text`
+
+```text
+[2/6] VLM Script Generation
+VLM script generation completed.
+spoken_json:    outputs/<video_stem>/scripts/page_01.spoken.json
+
+Stage 2 review action
+- c: continue to the next stage
+- b: go back to the previous stage
+- s: stop here
+Choice (c/b/s) [c]: c
+```
+
+### Stage 3. Voice Profile Generation
 
 **Output**
 
 ```text
-[2/5] Voice Profile Generation (skipped, using existing profile)
+[3/6] Voice Profile Generation (skipped, using existing profile)
 profile_path: outputs/voice_profiles/reference_voice/reference_voice.pt
 ```
 
-### Stage 3. Voice Generation
+### Stage 4. Voice Generation
 
 **Output and Review**
 
@@ -192,17 +216,17 @@ Edit or regenerate if needed:
 - regenerate by paragraph index if wording is correct but audio sounds bad
 
 ```text
-[3/5] Voice Generation
+[4/6] Voice Generation
 Paragraph indices to generate (comma separated, empty means all): 4,7
 Optional volume gain for this regeneration (e.g. 0.9, 1.1, default empty): 1.1
 
-Stage 3 completed.
+Voice generation completed.
 manifest: outputs/<video_stem>/voice/segments_manifest.json
 segments_dir: outputs/<video_stem>/voice/segments
 Available paragraphs:
 2, 3, 4, 5, 6, 7
 
-Stage 3 review action
+Voice generation review action
 - c: continue to the next stage
 - r: regenerate one or more paragraphs
 - s: stop here
@@ -210,7 +234,7 @@ Choice (c/r/s) [c]: r
 Enter paragraph indices to regenerate (comma separated or 'all'): 4,7
 ```
 
-### Stage 4. Timeline Alignment
+### Stage 5. Timeline Alignment
 
 **Output and Review**
 
@@ -227,19 +251,19 @@ Edit if needed:
 - for missing paragraphs, set `matched=true` and provide `start`
 
 ```text
-[4/5] Timeline Alignment
-Stage 4 completed.
+[5/6] Timeline Alignment
+Timeline alignment completed.
 timeline: outputs/<video_stem>/timeline/page_01.timeline.final.json
 status: complete
 missing: []
 
-Stage 4 review action
+Stage 5 review action
 - c: continue to the next stage
 - s: stop here
 Choice (c/s) [c]: c
 ```
 
-### Stage 5. Video Composition
+### Stage 6. Video Composition
 
 **Output and Review**
 
@@ -248,35 +272,35 @@ Check:
 - retiming quality
 - audio-video alignment
 
-If a cover intro is enabled, Stage 5 will:
+If a cover intro is enabled, Stage 6 will:
 - prepend the cover image as a static intro clip
 - use the selected cover paragraph audio at the beginning
 - shift the main video body after the intro duration
 
-If an outro page is enabled, Stage 5 will:
+If an outro page is enabled, Stage 6 will:
 - append a static outro page after the main video
 - use a fixed slogan audio if provided
 - otherwise generate the slogan audio from the current voice profile and append it at the end
 
 If something is wrong:
-- go back to Stage 3 for audio issues
-- go back to Stage 4 for timing issues
+- go back to Stage 4 for audio issues
+- go back to Stage 5 for timing issues
 
 ```text
-[5/5] Video Composition
-Stage 5 completed.
+[6/6] Video Composition
+Video composition completed.
 final_video: outputs/<video_stem>/composed/page_composed.mp4
 output_dir:   outputs/<video_stem>/composed
 ```
 
 ## Current Behavior
 
-- video-context script generation from sampled keyframes
+- video-context script generation is split into keyframe extraction and VLM script generation stages
 - video windows use left-closed, right-open frame assignment, so boundary keyframes belong to the next window
 - narration character budgets scale with keyframe count: `50 * keyframe_count` per window
 - narration prompts ask the VLM to prioritize large on-screen text because it is often annotation text
 - paragraph-level audio generation
-- optional paragraph selection and volume gain during Stage 3 voice generation
+- optional paragraph selection and volume gain during Stage 4 voice generation
 - profile path accepts either a `.pt` file or a profile directory containing `<dirname>.pt`
 - optional cover intro support with `cover_image` and `cover_paragraph_index`
 - when a cover intro is enabled, the cover paragraph is excluded from body timeline alignment and the body starts from the next paragraph
@@ -298,9 +322,9 @@ output_dir:   outputs/<video_stem>/composed
 ## Project Structure
 
 - `outputs/voice_profiles/`: saved voice profiles `.pt`
-- `outputs/<video_stem>/scripts/`: generated `spoken.json` and `extracted.json`
-- `outputs/<video_stem>/timeline_debug/`: Stage 1 keyframes, window manifests, prompts, and model responses
-- `outputs/<video_stem>/timeline/`: final timeline JSON and Stage 4 debug files
+- `outputs/<video_stem>/scripts/`: generated `spoken.json`
+- `outputs/<video_stem>/timeline_debug/`: Stage 1 keyframes/window manifests and Stage 2 prompts/model responses
+- `outputs/<video_stem>/timeline/`: final timeline JSON and Stage 5 debug files
 - `outputs/<video_stem>/voice/`: generated voice segment WAVs and manifest
 - `outputs/<video_stem>/composed/`: final composed video and composition artifacts
 - `pipeline/`: reusable page-level workflow scripts and older tooling
