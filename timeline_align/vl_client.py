@@ -82,7 +82,7 @@ def call_vl_gemini(
     api_key: str,
     windows: list[dict[str, Any]],
     prompt: str,
-    model: str = "gemini-3-pro-preview",
+    model: str = "gemini-2.5-flash",
 ) -> dict:
     from google import genai
     from google.genai import types
