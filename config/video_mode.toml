@@ -59,7 +59,22 @@ detection_max_width = 960
 # seconds apart or more. Set higher to reduce fill frames.
 fill_gap_sec = 6.0
 
-# Optional. Leave empty to read GEMINI_API_KEY from environment or .env.
+# Optional. Vision-language API provider.
+# - gemini: Google GenAI API, reads GEMINI_API_KEY when api_key is empty.
+# - openai_compatible: OpenAI chat-completions compatible API, reads
+#   OPENAI_COMPATIBLE_API_KEY or OPENAI_API_KEY when api_key is empty.
+vl_provider = 'openai_compatible'
+
+# Optional. Model name for the selected provider.
+# Defaults:
+# - gemini: gemini-2.5-flash
+# - openai_compatible: Qwen/Qwen3.5-27B
+vl_model = ''
+
+# Optional. Required for most openai_compatible services.
+vl_base_url = ''
+
+# Optional. Leave empty to read the provider-specific API key from environment or .env.
 api_key = ''
 
 [outputs]

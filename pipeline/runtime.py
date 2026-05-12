@@ -36,6 +36,10 @@ def read_env_key(name: str) -> str | None:
     return None
 
 
+def read_openai_compatible_env_key() -> str | None:
+    return read_env_key("OPENAI_COMPATIBLE_API_KEY") or read_env_key("OPENAI_API_KEY")
+
+
 def needs_script_inputs(run_mode: str, target_stage: str | None) -> bool:
     return run_mode == "full" or (run_mode == "only" and target_stage == "script")
 
@@ -170,6 +174,9 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
     if fill_gap_sec is not None:
         args.fill_gap_sec = float(fill_gap_sec)
     args.api_key = empty_to_none(timeline.get("api_key")) or args.api_key
+    args.vl_provider = empty_to_none(timeline.get("vl_provider")) or args.vl_provider
+    args.vl_model = empty_to_none(timeline.get("vl_model")) or args.vl_model
+    args.vl_base_url = empty_to_none(timeline.get("vl_base_url")) or args.vl_base_url
 
     args.stage1_output_dir = empty_to_none(outputs.get("stage1_output_dir"))
     args.profile_output_dir = empty_to_none(outputs.get("profile_output_dir"))
@@ -233,6 +240,9 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
         getattr(args, "detection_max_width", 960) or 960
     )
     config["fill_gap_sec"] = float(getattr(args, "fill_gap_sec", 6.0) or 6.0)
+    config["vl_provider"] = getattr(args, "vl_provider", "gemini") or "gemini"
+    config["vl_model"] = getattr(args, "vl_model", None)
+    config["vl_base_url"] = getattr(args, "vl_base_url", None)
 
     if needs_script_inputs(run_mode, target_stage):
         config["page"] = 1
@@ -430,8 +440,14 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["outro_profile"] = outro_profile
     config["paragraphs"] = args.paragraphs
     config["volume_gain"] = args.volume_gain
-    env_key_name = "GEMINI_API_KEY"
-    config["api_key"] = args.api_key or read_env_key(env_key_name)
+    uses_openai_compatible = config.get("vl_provider") == "openai_compatible"
+    env_key_name = "OPENAI_COMPATIBLE_API_KEY" if uses_openai_compatible else "GEMINI_API_KEY"
+    env_api_key = (
+        read_openai_compatible_env_key()
+        if uses_openai_compatible
+        else read_env_key(env_key_name)
+    )
+    config["api_key"] = args.api_key or env_api_key
     if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
         config["api_key"] = prompt_text(env_key_name, required=True)
     return config
@@ -497,6 +513,11 @@ def summarize_initial_inputs(
     if config.get("volume_gain") is not None:
         lines.append(f"volume_gain: {config.get('volume_gain')}")
 
+    lines.append(f"vl_provider: {config.get('vl_provider', 'gemini')}")
+    if config.get("vl_model"):
+        lines.append(f"vl_model: {config.get('vl_model')}")
+    if config.get("vl_base_url"):
+        lines.append(f"vl_base_url: {config.get('vl_base_url')}")
     lines.append("api_key: " + ("set" if config.get("api_key") else "not set"))
     return lines
 
@@ -537,6 +558,9 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.paragraphs = config.get("paragraphs")
     args.volume_gain = config.get("volume_gain")
     args.api_key = config.get("api_key")
+    args.vl_provider = config.get("vl_provider", "gemini")
+    args.vl_model = config.get("vl_model")
+    args.vl_base_url = config.get("vl_base_url")
     args.frame_stride = config.get("frame_stride")
 
 
@@ -626,6 +650,9 @@ def clear_args_for_section(args: argparse.Namespace, section: str) -> None:
         return
     if section == "probe":
         args.api_key = None
+        args.vl_provider = "gemini"
+        args.vl_model = None
+        args.vl_base_url = None
         return
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -14,6 +15,25 @@ def load_gemini_api_key(explicit_key: str | None = None) -> str:
     if not api_key:
         raise SystemExit("Environment variable GEMINI_API_KEY is required.")
     return api_key
+
+
+def load_openai_compatible_api_key(explicit_key: str | None = None) -> str:
+    api_key = (
+        explicit_key
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("OPENAI_COMPATIBLE_API_KEY")
+    )
+    if not api_key:
+        raise SystemExit(
+            "Environment variable OPENAI_API_KEY or OPENAI_COMPATIBLE_API_KEY is required."
+        )
+    return api_key
+
+
+def load_vl_api_key(provider: str = "gemini", explicit_key: str | None = None) -> str:
+    if provider == "openai_compatible":
+        return load_openai_compatible_api_key(explicit_key)
+    return load_gemini_api_key(explicit_key)
 
 
 def load_page_segments(spoken_json: Path) -> tuple[str, list[dict]]:
@@ -106,6 +126,84 @@ def call_vl_gemini(
 
     response = client.models.generate_content(model=model, contents=contents)
     return {"content": getattr(response, "text", "")}
+
+
+def _to_data_image_url(image_bytes: bytes, mime_type: str = "image/png") -> str:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def call_vl_openai_compatible(
+    api_key: str,
+    windows: list[dict[str, Any]],
+    prompt: str,
+    model: str = "Qwen/Qwen3.5-27B",
+    base_url: str = "https://api-inference.modelscope.cn/v1",
+    max_tokens: int = 2048,
+    temperature: float = 0.2,
+) -> dict:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+
+    for window in windows:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Window {window['window_id']} | "
+                    f"{window['start_time']:.2f}s - {window['end_time']:.2f}s"
+                ),
+            }
+        )
+        for index, frame in enumerate(window.get("frames", []), start=1):
+            frame_label = f"#{index}"
+            time_text = f"@ {float(frame['time']):.2f}s"
+            image_bytes = _annotate_frame_bytes(
+                Path(frame["image_path"]), frame_label, time_text
+            )
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _to_data_image_url(image_bytes)},
+                }
+            )
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": content}],
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    message = response.choices[0].message if response.choices else None
+    return {"content": getattr(message, "content", "") if message else ""}
+
+
+def call_vl_model(
+    api_key: str,
+    windows: list[dict[str, Any]],
+    prompt: str,
+    provider: str = "gemini",
+    model: str | None = None,
+    base_url: str | None = None,
+) -> dict:
+    if provider == "openai_compatible":
+        return call_vl_openai_compatible(
+            api_key=api_key,
+            windows=windows,
+            prompt=prompt,
+            model=model or "Qwen/Qwen3.5-27B",
+            base_url=base_url or "https://api-inference.modelscope.cn/v1",
+        )
+    if provider != "gemini":
+        raise ValueError(f"Unsupported VL provider: {provider}")
+    return call_vl_gemini(
+        api_key=api_key,
+        windows=windows,
+        prompt=prompt,
+        model=model or "gemini-2.5-flash",
+    )
 
 
 def _extract_json_snippet(content: str) -> str | None:
@@ -206,6 +304,9 @@ def probe_frames(
     segments: list[dict],
     frames: list[dict],
     frame_hint_builder=None,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
 ) -> list[dict]:
     results = []
     for frame in frames:
@@ -215,7 +316,7 @@ def probe_frames(
             else f"当前视频时间点约为 {frame['time']} 秒。请注意允许返回 unknown。"
         )
         prompt = build_prompt(title=title, segments=segments, frame_hint=hint)
-        response = call_vl_gemini(
+        response = call_vl_model(
             api_key=api_key,
             windows=[
                 {
@@ -226,6 +327,9 @@ def probe_frames(
                 }
             ],
             prompt=prompt,
+            provider=vl_provider,
+            model=vl_model,
+            base_url=vl_base_url,
         )
         content = response["content"]
         parsed = safe_parse_json_from_content(content)

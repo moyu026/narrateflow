@@ -12,8 +12,8 @@ It samples keyframes from the video, asks a vision-language model to draft conci
 | FFmpeg / FFprobe | Required | Used for frame extraction and video composition |
 | CUDA | Recommended | Speeds up local TTS inference |
 | Local TTS backend | Qwen-TTS | Used in `voice_process` |
-| VL backend | Gemini via Google GenAI API | Used in `timeline_align` |
-| API key | `GEMINI_API_KEY` | Required for timeline alignment |
+| VL backend | Gemini or OpenAI-compatible chat-completions API | Used in `timeline_align` |
+| API key | `GEMINI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, or config `api_key` | Required for timeline alignment |
 
 ## Installation
 
@@ -39,7 +39,29 @@ The recommended way to run NarrateFlow is through the pipeline entrypoint:
 python run_pipeline.py
 ```
 
-The default configuration file is `config/video_mode.toml`. Fill in the video path, Gemini key or `GEMINI_API_KEY`, and voice profile settings before running.
+The default configuration file is `config/video_mode.toml`. Fill in the video path, vision-language API settings, and voice profile settings before running.
+
+By default, the pipeline uses Gemini:
+
+```toml
+[timeline]
+vl_provider = 'gemini'
+vl_model = ''
+vl_base_url = ''
+api_key = ''  # empty means read GEMINI_API_KEY
+```
+
+To use an OpenAI-compatible vision-language service such as ModelScope Qwen, set:
+
+```toml
+[timeline]
+vl_provider = 'openai_compatible'
+vl_model = 'Qwen/Qwen3.5-27B'
+vl_base_url = 'https://api-inference.modelscope.cn/v1'
+api_key = ''  # empty means read OPENAI_COMPATIBLE_API_KEY or OPENAI_API_KEY
+```
+
+You can also put the API key directly in `api_key`, but environment variables are safer for shared config files.
 
 The pipeline supports three execution modes:
 
@@ -50,7 +72,7 @@ The pipeline supports three execution modes:
 Stage names:
 
 1. Keyframe extraction: sample keyframes and build `window_manifest.json`
-2. VLM script generation: call Gemini on the prepared windows and write narration JSON
+2. VLM script generation: call the configured vision-language model on the prepared windows and write narration JSON
 3. Voice profile generation
 4. Voice generation
 5. Timeline JSON generation

@@ -8,8 +8,8 @@ from typing import Any
 
 from timeline_align.keyframe_filter import sample_keyframes
 from timeline_align.vl_client import (
-    call_vl_gemini,
-    load_gemini_api_key,
+    call_vl_model,
+    load_vl_api_key,
     parse_gemini_batch_response,
     safe_parse_json_from_content,
 )
@@ -363,14 +363,17 @@ def generate_window_scripts(
     windows: list[dict[str, Any]],
     reference_text: str,
     global_summary: str,
-    gemini_api_key: str | None,
+    vl_api_key: str | None,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
     batch_size: int = 3,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     drafts: list[dict[str, Any]] = []
     requests_log: list[dict[str, Any]] = []
     responses_log: list[dict[str, Any]] = []
     previous_item: dict[str, Any] | None = None
-    resolved_api_key = load_gemini_api_key(gemini_api_key)
+    resolved_api_key = load_vl_api_key(vl_provider, vl_api_key)
 
     batch_starts = range(0, len(windows), batch_size)
     for start in batch_starts:
@@ -398,10 +401,13 @@ def generate_window_scripts(
             }
         )
         try:
-            response = call_vl_gemini(
+            response = call_vl_model(
                 api_key=resolved_api_key,
                 windows=prepared_batch,
                 prompt=prompt,
+                provider=vl_provider,
+                model=vl_model,
+                base_url=vl_base_url,
             )
             response_text = str(response.get("content", "")).strip()
             parsed = parse_gemini_batch_response(response_text)
@@ -459,15 +465,21 @@ def generate_window_scripts(
 def generate_cover_intro(
     cover_window: dict[str, Any],
     reference_text: str,
-    gemini_api_key: str | None,
+    vl_api_key: str | None,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
 ) -> tuple[dict[str, Any], str]:
-    resolved_api_key = load_gemini_api_key(gemini_api_key)
+    resolved_api_key = load_vl_api_key(vl_provider, vl_api_key)
     prompt = build_cover_prompt(reference_text)
     try:
-        response = call_vl_gemini(
+        response = call_vl_model(
             api_key=resolved_api_key,
             windows=[cover_window],
             prompt=prompt,
+            provider=vl_provider,
+            model=vl_model,
+            base_url=vl_base_url,
         )
         parsed = safe_parse_json_from_content(str(response.get("content", "")))
     except Exception:
@@ -631,6 +643,9 @@ def generate_video_script_from_windows(
     debug_dir: Path,
     windows: list[dict[str, Any]],
     gemini_api_key: str | None = None,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
     reference_text_path: Path | None = None,
     enable_ocr: bool = False,
     batch_size: int = 3,
@@ -643,7 +658,10 @@ def generate_video_script_from_windows(
         cover_draft, cover_summary = generate_cover_intro(
             cover_window=windows[0],
             reference_text=reference_text,
-            gemini_api_key=gemini_api_key,
+            vl_api_key=gemini_api_key,
+            vl_provider=vl_provider,
+            vl_model=vl_model,
+            vl_base_url=vl_base_url,
         )
         global_summary = cover_summary
         windows = windows[1:]
@@ -658,7 +676,10 @@ def generate_video_script_from_windows(
         windows=windows,
         reference_text=reference_text,
         global_summary=global_summary,
-        gemini_api_key=gemini_api_key,
+        vl_api_key=gemini_api_key,
+        vl_provider=vl_provider,
+        vl_model=vl_model,
+        vl_base_url=vl_base_url,
         batch_size=batch_size,
     )
     if cover_draft is not None:
@@ -687,6 +708,9 @@ def run_video_script_generate(
     output_dir: Path,
     debug_dir: Path,
     gemini_api_key: str | None = None,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
     reference_text_path: Path | None = None,
     cover_image: Path | None = None,
     cover_duration_sec: float | None = None,
@@ -717,6 +741,9 @@ def run_video_script_generate(
         debug_dir=debug_dir,
         windows=prepared["windows"],
         gemini_api_key=gemini_api_key,
+        vl_provider=vl_provider,
+        vl_model=vl_model,
+        vl_base_url=vl_base_url,
         reference_text_path=reference_text_path,
         enable_ocr=enable_ocr,
         batch_size=batch_size,

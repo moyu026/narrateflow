@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 from timeline_align.keyframe_filter import sample_keyframes
 from timeline_align.vl_client import (
     extract_frames_at_times,
-    load_gemini_api_key,
+    load_vl_api_key,
     load_page_segments,
     load_selected_keyframes,
     probe_frames,
@@ -122,8 +122,11 @@ def build_probe_payload(
     paragraphs_text: str | None = None,
     frame_hint: str | None = None,
     body_start_paragraph_index: int = 2,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
 ) -> dict[str, Any]:
-    resolved_api_key = load_gemini_api_key(api_key)
+    resolved_api_key = load_vl_api_key(vl_provider, api_key)
     title, segments = load_page_segments(spoken_json)
     segments = [
         s for s in segments if int(s.get("paragraph_index", 0)) >= body_start_paragraph_index
@@ -167,6 +170,9 @@ def build_probe_payload(
         segments=segments,
         frames=frames,
         frame_hint_builder=hint_builder,
+        vl_provider=vl_provider,
+        vl_model=vl_model,
+        vl_base_url=vl_base_url,
     )
     return {"mode": mode, "spoken_json": str(spoken_json), "results": results}
 
@@ -557,6 +563,9 @@ def run_gap_reprobe(
     api_key: str | None,
     video_duration: float,
     round_index: int,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
     keyframes_json: Path | None = None,
     start_only: bool = False,
 ) -> list[dict[str, Any]]:
@@ -600,6 +609,9 @@ def run_gap_reprobe(
             frame_hint=(
                 f"请重点判断 paragraph_index={current_idx} 是否出现在这段时间范围内。若无法判断可返回 unknown。"
             ),
+            vl_provider=vl_provider,
+            vl_model=vl_model,
+            vl_base_url=vl_base_url,
         )
         payload["source_name"] = f"gap_r{round_index:02d}_p{current_idx:02d}.probe.json"
         gap_payloads.append(payload)
@@ -613,6 +625,9 @@ def run_timeline_align(
     output: Path,
     debug_dir: Path | None = None,
     api_key: str | None = None,
+    vl_provider: str = "gemini",
+    vl_model: str | None = None,
+    vl_base_url: str | None = None,
     probe_mode: str = "keyframes",
     probe_times: str | None = None,
     probe_paragraphs: str | None = None,
@@ -666,6 +681,9 @@ def run_timeline_align(
         times_text=probe_times,
         paragraphs_text=probe_paragraphs,
         body_start_paragraph_index=body_start_paragraph_index,
+        vl_provider=vl_provider,
+        vl_model=vl_model,
+        vl_base_url=vl_base_url,
     )
     write_json(probe_json, probe_payload)
 
@@ -697,6 +715,9 @@ def run_timeline_align(
                 final_payload=final_payload,
                 debug_dir=resolved_debug_dir,
                 api_key=api_key,
+                vl_provider=vl_provider,
+                vl_model=vl_model,
+                vl_base_url=vl_base_url,
                 video_duration=video_duration,
                 round_index=round_index,
                 keyframes_json=keyframes_json,
@@ -779,6 +800,11 @@ def main() -> None:
     parser.add_argument("--debug-dir", default=None)
     parser.add_argument("--api-key", default=None)
     parser.add_argument(
+        "--vl-provider", choices=["gemini", "openai_compatible"], default="gemini"
+    )
+    parser.add_argument("--vl-model", default=None)
+    parser.add_argument("--vl-base-url", default=None)
+    parser.add_argument(
         "--probe-mode", choices=["keyframes", "times"], default="keyframes"
     )
     parser.add_argument("--probe-times", required=True)
@@ -801,6 +827,9 @@ def main() -> None:
         output=Path(args.output),
         debug_dir=Path(args.debug_dir) if args.debug_dir else None,
         api_key=args.api_key,
+        vl_provider=args.vl_provider,
+        vl_model=args.vl_model,
+        vl_base_url=args.vl_base_url,
         probe_mode=args.probe_mode,
         probe_times=args.probe_times,
         probe_paragraphs=args.probe_paragraphs,

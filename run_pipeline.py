@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detection-max-width", type=int, default=960)
     parser.add_argument("--fill-gap-sec", type=float, default=6.0)
     parser.add_argument("--api-key")
+    parser.add_argument(
+        "--vl-provider", choices=["gemini", "openai_compatible"], default="gemini"
+    )
+    parser.add_argument("--vl-model")
+    parser.add_argument("--vl-base-url")
     parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(
         "--only-stage",
