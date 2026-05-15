@@ -11,3 +11,4 @@ opencv-python
 numpy
 gradio
 google-genai
+openai

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -9,11 +10,35 @@ from typing import Any
 
 import cv2
 
-def load_gemini_api_key(explicit_key: str | None = None) -> str:
-    api_key = explicit_key or os.environ.get("GEMINI_API_KEY")
+DEFAULT_VL_PROVIDER = "openai"
+DEFAULT_OPENAI_MODEL = "Qwen/Qwen3.5-27B"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+
+
+def _normalize_provider(provider: str | None = None) -> str:
+    return (provider or DEFAULT_VL_PROVIDER).strip().lower().replace("-", "_")
+
+
+def load_vlm_api_key(
+    explicit_key: str | None = None, provider: str | None = None
+) -> str:
+    resolved_provider = _normalize_provider(provider)
+    env_names = (
+        ("GEMINI_API_KEY",)
+        if resolved_provider == "gemini"
+        else ("OPENAI_API_KEY",)
+    )
+    api_key = explicit_key or next(
+        (os.environ[name] for name in env_names if os.environ.get(name)),
+        None,
+    )
     if not api_key:
-        raise SystemExit("Environment variable GEMINI_API_KEY is required.")
+        raise SystemExit(f"Environment variable {env_names[0]} is required.")
     return api_key
+
+
+def load_gemini_api_key(explicit_key: str | None = None) -> str:
+    return load_vlm_api_key(explicit_key=explicit_key, provider="gemini")
 
 
 def load_page_segments(spoken_json: Path) -> tuple[str, list[dict]]:
@@ -82,7 +107,7 @@ def call_vl_gemini(
     api_key: str,
     windows: list[dict[str, Any]],
     prompt: str,
-    model: str = "gemini-2.5-flash",
+    model: str = DEFAULT_GEMINI_MODEL,
 ) -> dict:
     from google import genai
     from google.genai import types
@@ -106,6 +131,89 @@ def call_vl_gemini(
 
     response = client.models.generate_content(model=model, contents=contents)
     return {"content": getattr(response, "text", "")}
+
+
+def call_vl_openai(
+    api_key: str,
+    windows: list[dict[str, Any]],
+    prompt: str,
+    model: str = DEFAULT_OPENAI_MODEL,
+    base_url: str | None = None,
+) -> dict:
+    from openai import OpenAI
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for window in windows:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Window {window['window_id']} | "
+                    f"{window['start_time']:.2f}s - {window['end_time']:.2f}s"
+                ),
+            }
+        )
+        for index, frame in enumerate(window.get("frames", []), start=1):
+            frame_label = f"#{index}"
+            time_text = f"@ {float(frame['time']):.2f}s"
+            image_bytes = _annotate_frame_bytes(
+                Path(frame["image_path"]), frame_label, time_text
+            )
+            image_b64 = base64.b64encode(image_bytes).decode("ascii")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_b64}",
+                    },
+                }
+            )
+
+    resolved_base_url = (
+        base_url
+        or os.environ.get("OPENAI_BASE_URL")
+        or os.environ.get("VL_BASE_URL")
+        or "https://api.openai.com/v1"
+    ).rstrip("/")
+    if resolved_base_url.endswith("/chat/completions"):
+        resolved_base_url = resolved_base_url[: -len("/chat/completions")]
+    client = OpenAI(api_key=api_key, base_url=resolved_base_url, timeout=120)
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": content}],
+        temperature=0,
+    )
+    content_text = response.choices[0].message.content if response.choices else ""
+    return {"content": content_text or "", "raw": response.model_dump()}
+
+
+def call_vl_model(
+    api_key: str,
+    windows: list[dict[str, Any]],
+    prompt: str,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> dict:
+    resolved_provider = _normalize_provider(provider)
+    if resolved_provider == "gemini":
+        return call_vl_gemini(
+            api_key=api_key,
+            windows=windows,
+            prompt=prompt,
+            model=model or DEFAULT_GEMINI_MODEL,
+        )
+    if resolved_provider == "openai" or (
+        resolved_provider.startswith("openai_") and resolved_provider.endswith("compatible")
+    ):
+        return call_vl_openai(
+            api_key=api_key,
+            windows=windows,
+            prompt=prompt,
+            model=model or DEFAULT_OPENAI_MODEL,
+            base_url=base_url,
+        )
+    raise ValueError(f"Unsupported VLM provider: {provider}")
 
 
 def _extract_json_snippet(content: str) -> str | None:
@@ -205,6 +313,9 @@ def probe_frames(
     title: str,
     segments: list[dict],
     frames: list[dict],
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
     frame_hint_builder=None,
 ) -> list[dict]:
     results = []
@@ -215,7 +326,7 @@ def probe_frames(
             else f"当前视频时间点约为 {frame['time']} 秒。请注意允许返回 unknown。"
         )
         prompt = build_prompt(title=title, segments=segments, frame_hint=hint)
-        response = call_vl_gemini(
+        response = call_vl_model(
             api_key=api_key,
             windows=[
                 {
@@ -226,6 +337,9 @@ def probe_frames(
                 }
             ],
             prompt=prompt,
+            provider=provider,
+            model=model,
+            base_url=base_url,
         )
         content = response["content"]
         parsed = safe_parse_json_from_content(content)

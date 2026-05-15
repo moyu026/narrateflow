@@ -77,6 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detection-max-width", type=int, default=960)
     parser.add_argument("--fill-gap-sec", type=float, default=6.0)
     parser.add_argument("--api-key")
+    parser.add_argument("--vlm-provider")
+    parser.add_argument("--vlm-model")
+    parser.add_argument("--vlm-base-url")
     parser.add_argument("--enable-ocr", action="store_true")
     parser.add_argument(
         "--only-stage",

@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 from timeline_align.keyframe_filter import sample_keyframes
 from timeline_align.vl_client import (
     extract_frames_at_times,
-    load_gemini_api_key,
+    load_vlm_api_key,
     load_page_segments,
     load_selected_keyframes,
     probe_frames,
@@ -116,6 +116,9 @@ def build_probe_payload(
     spoken_json: Path,
     output_path: Path,
     api_key: str | None = None,
+    vlm_provider: str | None = None,
+    vlm_model: str | None = None,
+    vlm_base_url: str | None = None,
     video: str | None = None,
     keyframes_json: str | None = None,
     times_text: str | None = None,
@@ -123,7 +126,7 @@ def build_probe_payload(
     frame_hint: str | None = None,
     body_start_paragraph_index: int = 2,
 ) -> dict[str, Any]:
-    resolved_api_key = load_gemini_api_key(api_key)
+    resolved_api_key = load_vlm_api_key(api_key, provider=vlm_provider)
     title, segments = load_page_segments(spoken_json)
     segments = [
         s for s in segments if int(s.get("paragraph_index", 0)) >= body_start_paragraph_index
@@ -166,6 +169,9 @@ def build_probe_payload(
         title=title,
         segments=segments,
         frames=frames,
+        provider=vlm_provider,
+        model=vlm_model,
+        base_url=vlm_base_url,
         frame_hint_builder=hint_builder,
     )
     return {"mode": mode, "spoken_json": str(spoken_json), "results": results}
@@ -555,6 +561,9 @@ def run_gap_reprobe(
     final_payload: dict[str, Any],
     debug_dir: Path,
     api_key: str | None,
+    vlm_provider: str | None,
+    vlm_model: str | None,
+    vlm_base_url: str | None,
     video_duration: float,
     round_index: int,
     keyframes_json: Path | None = None,
@@ -594,6 +603,9 @@ def run_gap_reprobe(
             output_path=debug_dir
             / f"gap_r{round_index:02d}_p{current_idx:02d}.probe.json",
             api_key=api_key,
+            vlm_provider=vlm_provider,
+            vlm_model=vlm_model,
+            vlm_base_url=vlm_base_url,
             video=str(video),
             times_text=",".join(str(t) for t in times),
             paragraphs_text=",".join(str(idx) for idx in sorted(candidate_indices)),
@@ -613,6 +625,9 @@ def run_timeline_align(
     output: Path,
     debug_dir: Path | None = None,
     api_key: str | None = None,
+    vlm_provider: str | None = None,
+    vlm_model: str | None = None,
+    vlm_base_url: str | None = None,
     probe_mode: str = "keyframes",
     probe_times: str | None = None,
     probe_paragraphs: str | None = None,
@@ -661,6 +676,9 @@ def run_timeline_align(
         spoken_json=spoken_json,
         output_path=probe_json,
         api_key=api_key,
+        vlm_provider=vlm_provider,
+        vlm_model=vlm_model,
+        vlm_base_url=vlm_base_url,
         video=str(video),
         keyframes_json=str(keyframes_json) if probe_mode == "keyframes" else None,
         times_text=probe_times,
@@ -697,6 +715,9 @@ def run_timeline_align(
                 final_payload=final_payload,
                 debug_dir=resolved_debug_dir,
                 api_key=api_key,
+                vlm_provider=vlm_provider,
+                vlm_model=vlm_model,
+                vlm_base_url=vlm_base_url,
                 video_duration=video_duration,
                 round_index=round_index,
                 keyframes_json=keyframes_json,
@@ -778,6 +799,9 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--debug-dir", default=None)
     parser.add_argument("--api-key", default=None)
+    parser.add_argument("--vlm-provider", default=None)
+    parser.add_argument("--vlm-model", default=None)
+    parser.add_argument("--vlm-base-url", default=None)
     parser.add_argument(
         "--probe-mode", choices=["keyframes", "times"], default="keyframes"
     )
@@ -801,6 +825,9 @@ def main() -> None:
         output=Path(args.output),
         debug_dir=Path(args.debug_dir) if args.debug_dir else None,
         api_key=args.api_key,
+        vlm_provider=args.vlm_provider,
+        vlm_model=args.vlm_model,
+        vlm_base_url=args.vlm_base_url,
         probe_mode=args.probe_mode,
         probe_times=args.probe_times,
         probe_paragraphs=args.probe_paragraphs,

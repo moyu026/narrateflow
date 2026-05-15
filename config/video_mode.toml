@@ -14,7 +14,7 @@ run_mode = 'full'
 target_stage = ''
 
 [input]
-# Required. Video mode uses this video, extracts keyframes, and calls call_vl_gemini.
+# Required. Video mode uses this video, extracts keyframes, and calls the VLM API.
 video = ''
 
 # Optional. Set to a .txt reference document to constrain terminology and topic.
@@ -59,7 +59,21 @@ detection_max_width = 960
 # seconds apart or more. Set higher to reduce fill frames.
 fill_gap_sec = 6.0
 
-# Optional. Leave empty to read GEMINI_API_KEY from environment or .env.
+# Optional. Vision-language API provider.
+# - gemini: Google GenAI API, reads GEMINI_API_KEY when api_key is empty.
+# - openai: OpenAI chat-completions API, reads OPENAI_API_KEY when api_key is empty.
+vl_provider = 'openai'
+
+# Optional. Model name for the selected provider.
+# Defaults:
+# - gemini: gemini-2.5-flash
+# - openai: gpt-4o-mini
+vl_model = ''
+
+# Optional. Required for most OpenAI services.
+vl_base_url = ''
+
+# Optional. Leave empty to read the provider-specific API key from environment or .env.
 api_key = ''
 
 [outputs]

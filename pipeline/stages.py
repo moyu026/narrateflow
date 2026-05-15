@@ -91,6 +91,9 @@ def run_stage1_vlm(config: dict[str, Any], prepared: dict[str, Any]) -> dict[str
         debug_dir=debug_dir,
         windows=prepared["windows"],
         gemini_api_key=config.get("api_key"),
+        vlm_provider=config.get("vlm_provider"),
+        vlm_model=config.get("vlm_model"),
+        vlm_base_url=config.get("vlm_base_url"),
         reference_text_path=Path(config["reference_text"]) if config.get("reference_text") else None,
         enable_ocr=bool(config.get("enable_ocr", False)),
     )
@@ -265,6 +268,9 @@ def run_stage3(config: dict[str, Any], spoken_json: Path) -> Path:
         output=output,
         debug_dir=default_timeline_debug_dir(config, spoken_json),
         api_key=config["api_key"],
+        vlm_provider=config.get("vlm_provider"),
+        vlm_model=config.get("vlm_model"),
+        vlm_base_url=config.get("vlm_base_url"),
         cover_paragraph_index=(
             int(config.get("cover_paragraph_index") or 2)
             if config.get("cover_image")

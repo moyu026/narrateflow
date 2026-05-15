@@ -118,6 +118,7 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
     input_config = payload.get("input", {})
     voice = payload.get("voice", {})
     timeline = payload.get("timeline", {})
+    vlm = payload.get("vlm", {})
     outputs = payload.get("outputs", {})
     cover = payload.get("cover", {})
     outro = payload.get("outro", {})
@@ -169,7 +170,26 @@ def apply_video_mode_config(args: argparse.Namespace, config_path: Path) -> None
     fill_gap_sec = empty_to_none(timeline.get("fill_gap_sec"))
     if fill_gap_sec is not None:
         args.fill_gap_sec = float(fill_gap_sec)
-    args.api_key = empty_to_none(timeline.get("api_key")) or args.api_key
+    args.vlm_provider = (
+        empty_to_none(timeline.get("vl_provider"))
+        or empty_to_none(vlm.get("provider"))
+        or getattr(args, "vlm_provider", None)
+    )
+    args.vlm_model = (
+        empty_to_none(timeline.get("vl_model"))
+        or empty_to_none(vlm.get("model"))
+        or getattr(args, "vlm_model", None)
+    )
+    args.vlm_base_url = (
+        empty_to_none(timeline.get("vl_base_url"))
+        or empty_to_none(vlm.get("base_url"))
+        or getattr(args, "vlm_base_url", None)
+    )
+    args.api_key = (
+        empty_to_none(vlm.get("api_key"))
+        or empty_to_none(timeline.get("api_key"))
+        or args.api_key
+    )
 
     args.stage1_output_dir = empty_to_none(outputs.get("stage1_output_dir"))
     args.profile_output_dir = empty_to_none(outputs.get("profile_output_dir"))
@@ -233,6 +253,9 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
         getattr(args, "detection_max_width", 960) or 960
     )
     config["fill_gap_sec"] = float(getattr(args, "fill_gap_sec", 6.0) or 6.0)
+    config["vlm_provider"] = getattr(args, "vlm_provider", None) or "openai"
+    config["vlm_model"] = getattr(args, "vlm_model", None)
+    config["vlm_base_url"] = getattr(args, "vlm_base_url", None)
 
     if needs_script_inputs(run_mode, target_stage):
         config["page"] = 1
@@ -430,10 +453,16 @@ def resolve_initial_args(args: argparse.Namespace) -> dict[str, Any]:
     config["outro_profile"] = outro_profile
     config["paragraphs"] = args.paragraphs
     config["volume_gain"] = args.volume_gain
-    env_key_name = "GEMINI_API_KEY"
-    config["api_key"] = args.api_key or read_env_key(env_key_name)
+    if str(config.get("vlm_provider")).lower().replace("-", "_") == "gemini":
+        env_key_names = ("GEMINI_API_KEY",)
+    else:
+        env_key_names = ("OPENAI_API_KEY",)
+    config["api_key"] = args.api_key or next(
+        (value for name in env_key_names if (value := read_env_key(name))),
+        None,
+    )
     if not config["api_key"] and not getattr(args, "skip_optional_prompts", False):
-        config["api_key"] = prompt_text(env_key_name, required=True)
+        config["api_key"] = prompt_text(env_key_names[0], required=True)
     return config
 
 
@@ -497,6 +526,11 @@ def summarize_initial_inputs(
     if config.get("volume_gain") is not None:
         lines.append(f"volume_gain: {config.get('volume_gain')}")
 
+    lines.append(f"vlm_provider: {config.get('vlm_provider')}")
+    if config.get("vlm_model"):
+        lines.append(f"vlm_model: {config.get('vlm_model')}")
+    if config.get("vlm_base_url"):
+        lines.append(f"vlm_base_url: {config.get('vlm_base_url')}")
     lines.append("api_key: " + ("set" if config.get("api_key") else "not set"))
     return lines
 
@@ -537,6 +571,9 @@ def sync_config_to_args(args: argparse.Namespace, config: dict[str, Any]) -> Non
     args.paragraphs = config.get("paragraphs")
     args.volume_gain = config.get("volume_gain")
     args.api_key = config.get("api_key")
+    args.vlm_provider = config.get("vlm_provider")
+    args.vlm_model = config.get("vlm_model")
+    args.vlm_base_url = config.get("vlm_base_url")
     args.frame_stride = config.get("frame_stride")
 
 
